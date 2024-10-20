@@ -6,16 +6,12 @@ class UXO_object:
                  major_axis: float,
                  minor_axis: float,
                  strike: float,
-                 dip: float,
-                 conductivity: float,
-                 susceptibility: float):
+                 dip: float):
         self.center = center
         self.major_axis = major_axis
         self.minor_axis = minor_axis
         self.strike = strike
         self.dip = dip
-        self.conductivity = conductivity
-        self.susceptibility = susceptibility
 
     def _compute_rotation_matrix(self, inverse: bool = False):
         # y-axis rotation
@@ -42,7 +38,8 @@ class UXO_object:
     def get_vertical_intersects(self, x: float, y: float):
         rot = self._compute_rotation_matrix()
         rot_inv = self._compute_rotation_matrix(inverse=True)
-        pt = np.dot(np.array([x, y, 0]), rot_inv)
+        pt0 = np.array([x, y, 0]) - self.center
+        pt = np.dot(pt0, rot_inv)
         vec = np.dot(np.array([0, 0, 1]), rot_inv)
 
         # find quadratic coefficients
@@ -57,6 +54,6 @@ class UXO_object:
         else:
             t1 = (-b + np.sqrt(discriminant))/(2*a)
             t2 = (-b - np.sqrt(discriminant))/(2*a)
-            z1 = np.dot(np.array([pt + t1*vec]), rot)
-            z2 = np.dot(np.array([pt + t2*vec]), rot)
-            return z1, z2
+            p1 = np.dot(np.array([pt + t1*vec]), rot) + self.center
+            p2 = np.dot(np.array([pt + t2*vec]), rot) + self.center
+            return p1[0,2], p2[0,2]
