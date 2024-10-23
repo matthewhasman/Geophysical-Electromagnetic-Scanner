@@ -31,9 +31,6 @@ class UXO_object:
         ]
 
         return np.dot(Ay, Az) if not inverse else np.dot(Az.T, Ay.T)
-
-    def define_pts(self, n_points: int = 10):
-        raise NotImplementedError
     
     def get_vertical_intersects(self, x: float, y: float):
         rot = self._compute_rotation_matrix()
