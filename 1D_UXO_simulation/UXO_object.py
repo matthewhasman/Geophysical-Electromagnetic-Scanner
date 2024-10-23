@@ -57,3 +57,23 @@ class UXO_object:
             p1 = np.dot(np.array([pt + t1*vec]), rot) + self.center
             p2 = np.dot(np.array([pt + t2*vec]), rot) + self.center
             return p1[0,2], p2[0,2]
+        
+    def get_boundary_points(self, n_points_theta: int = 100, n_points_phi: int = 100):
+        # Generate theta and phi angles
+        theta = np.linspace(0, 2 * np.pi, n_points_theta)
+        phi = np.linspace(0, np.pi, n_points_phi)
+
+        # Create a meshgrid for theta and phi
+        theta, phi = np.meshgrid(theta, phi)
+
+        # Parametrize the surface of the spheroid (ellipsoid) using spherical coordinates
+        x = self.center[0] + self.minor_axis * np.sin(phi) * np.cos(theta)
+        y = self.center[1] + self.minor_axis * np.sin(phi) * np.sin(theta)
+        z = self.center[2] + self.major_axis * np.cos(phi)
+
+        # Apply the forward rotation matrix to rotate the points according to the spheroid's orientation
+        points = np.vstack([x.flatten(), y.flatten(), z.flatten()]).T
+        rot = self._compute_rotation_matrix()  # Use the forward rotation matrix
+        points_rotated = np.dot(points - self.center, rot) + self.center
+
+        return points_rotated
