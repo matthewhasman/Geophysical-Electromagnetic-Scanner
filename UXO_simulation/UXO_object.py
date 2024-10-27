@@ -1,6 +1,6 @@
 import numpy as np
 
-class UXO_object:
+class UXO_Object:
     """
     A class representing an unexploded ordnance (UXO) object, modeled as a rotated ellipsoid 
     with properties describing location, shape, orientation, and conductivity.

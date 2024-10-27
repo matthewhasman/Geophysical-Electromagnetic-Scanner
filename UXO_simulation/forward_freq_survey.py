@@ -2,7 +2,7 @@ import numpy as np
 import simpeg.electromagnetics.frequency_domain as fdem
 from simpeg import maps
 
-class Forward_Freq_Simulation:
+class Forward_Freq_Survey:
     def __init__(self, frequencies: np.ndarray, z0: float, moment: float, coil_spacing: float):
         self.survey = self._create_survey(frequencies, z0, moment, coil_spacing)
 
