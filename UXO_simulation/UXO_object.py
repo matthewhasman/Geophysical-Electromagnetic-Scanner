@@ -1,13 +1,36 @@
 import numpy as np
 
 class UXO_object:
+    """
+    A class representing an unexploded ordnance (UXO) object, modeled as a rotated ellipsoid 
+    with properties describing location, shape, orientation, and conductivity.
+
+    Attributes:
+        center (np.ndarray): 3D coordinates of the UXO object's center.
+        major_axis (float): Length of the major axis (along the z-axis).
+        minor_axis (float): Length of the minor axes (along the x and y axes).
+        strike (float): Horizontal angle (in degrees) of the major axis relative to the north.
+        dip (float): Vertical angle (in degrees) of the major axis from the horizontal.
+        conductivity (float): Conductivity of the UXO object (default is 1e6).
+    """
     def __init__(self,
                  center: np.ndarray,
                  major_axis: float,
                  minor_axis: float,
-                 strike: float,
-                 dip: float,
-                 conductivity: float = 1e6):
+                 strike: float = 0,
+                 dip: float = 0,
+                 conductivity: float = 1e6) -> None:
+        """
+        Initializes the UXO object with center location, dimensions, orientation, and conductivity.
+
+        Args:
+            center (np.ndarray): 3D coordinates of the UXO object's center.
+            major_axis (float): Length of the major axis (along the z-axis).
+            minor_axis (float): Length of the minor axes (along the x and y axes).
+            strike (float): Horizontal angle (in degrees) of the major axis relative to the north.
+            dip (float): Vertical angle (in degrees) of the major axis from the horizontal.
+            conductivity (float): Conductivity of the UXO object (default is 1e6).
+        """
         self.center = center
         self.major_axis = major_axis
         self.minor_axis = minor_axis
@@ -16,6 +39,15 @@ class UXO_object:
         self.conductivity = conductivity
 
     def _compute_rotation_matrix(self, inverse: bool = False):
+        """
+        Computes the rotation matrix for the UXO object based on its strike and dip.
+
+        Args:
+            inverse (bool): If True, computes the inverse rotation matrix (default is False).
+
+        Returns:
+            np.ndarray: The rotation matrix (or its inverse) representing the orientation of the UXO object.
+        """
         # y-axis rotation
         theta = self.dip * np.pi / 180
         Ay = np.r_[
@@ -35,6 +67,17 @@ class UXO_object:
         return np.dot(Ay, Az) if not inverse else np.dot(Az.T, Ay.T)
     
     def get_vertical_intersects(self, x: float, y: float):
+        """
+        Computes the vertical intersection points with the UXO object at the specified x and y coordinates.
+
+        Args:
+            x (float): X-coordinate of the point.
+            y (float): Y-coordinate of the point.
+
+        Returns:
+            tuple or None: A tuple containing the z-coordinates of the intersection points (z1, z2), 
+                           or None if no intersection occurs.
+        """
         rot = self._compute_rotation_matrix()
         rot_inv = self._compute_rotation_matrix(inverse=True)
         pt0 = np.array([x, y, 0]) - self.center
@@ -58,6 +101,16 @@ class UXO_object:
             return p1[0,2], p2[0,2]
         
     def get_boundary_points(self, n_points_theta: int = 100, n_points_phi: int = 100):
+        """
+        Generates points along the surface of the UXO object to define its boundary.
+
+        Args:
+            n_points_theta (int): Number of points in the azimuthal direction (default is 100).
+            n_points_phi (int): Number of points in the polar direction (default is 100).
+
+        Returns:
+            np.ndarray: Array of boundary points on the UXO object's surface after applying orientation.
+        """
         # Generate theta and phi angles
         theta = np.linspace(0, 2 * np.pi, n_points_theta)
         phi = np.linspace(0, np.pi, n_points_phi)
