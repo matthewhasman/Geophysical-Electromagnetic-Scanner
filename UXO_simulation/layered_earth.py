@@ -69,3 +69,4 @@ class Layered_Earth:
         ax.set_ylim([3, 0])
         ax.set_title("1D Layerd Earth")
         plt.show()
+        
