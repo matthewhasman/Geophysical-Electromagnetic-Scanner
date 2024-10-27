@@ -6,12 +6,14 @@ class UXO_object:
                  major_axis: float,
                  minor_axis: float,
                  strike: float,
-                 dip: float):
+                 dip: float,
+                 conductivity: float = 1e6):
         self.center = center
         self.major_axis = major_axis
         self.minor_axis = minor_axis
         self.strike = strike
         self.dip = dip
+        self.conductivity = conductivity
 
     def _compute_rotation_matrix(self, inverse: bool = False):
         # y-axis rotation
