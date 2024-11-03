@@ -67,6 +67,6 @@ class Layered_Earth:
         ax.grid(which="both")
         ax.set_xlabel(r"Conductivities ($S/m$)")
         ax.set_ylim([3, 0])
-        ax.set_title("1D Layerd Earth")
+        ax.set_title(f"1D Layerd Earth at Point ({pt[0]}, {pt[1]})")
         plt.show()
         
