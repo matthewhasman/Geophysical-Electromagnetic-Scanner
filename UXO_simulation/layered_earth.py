@@ -40,8 +40,8 @@ class Layered_Earth:
         """
         intersects = self.uxo_object.get_vertical_intersects(pt[0], pt[1])
         if intersects is None:
-            layer_thicknesses = np.array([])
-            layer_conductivities = np.array([self.background_conductivity])
+            layer_thicknesses = [3] # Depth of survey for plotting
+            layer_conductivities = [self.background_conductivity]
         else:
             layer_thicknesses = np.abs(np.array(intersects))
             layer_conductivities = np.r_[self.background_conductivity,
@@ -49,24 +49,27 @@ class Layered_Earth:
                                             self.background_conductivity]
         return layer_thicknesses, layer_conductivities
 
-    def plot_layered_earth(self, pt: tuple):
+    def plot_layered_earth(self, pt: tuple, ax=None):
         """
         Plots the 1D layered Earth model conductivity profile at a specified point.
 
         Args:
             pt (tuple): A (x, y) coordinate tuple where the profile is evaluated and plotted.
+            ax (matplotlib.axes.Axes, optional): Axes object to plot on. If None, a new subplot is created.
 
         Returns:
-            None: Displays a matplotlib plot of the 1D conductivity profile.
+            ax: aAxes object displaying the 1D conductivity profile of the Earth model.
         """
         layer_thicknesses, layer_conductivities = self.layers_at_pt(pt)
 
-        fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+        if ax is None:
+            fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
         ax = plot_1d_layer_model(layer_thicknesses, layer_conductivities, scale="log", ax=ax)
         ax.grid(which="both")
         ax.set_xlabel(r"Conductivities ($S/m$)")
         ax.set_ylim([3, 0])
         ax.set_title(f"1D Layerd Earth at Point ({pt[0]}, {pt[1]})")
-        plt.show()
+
+        return ax
         

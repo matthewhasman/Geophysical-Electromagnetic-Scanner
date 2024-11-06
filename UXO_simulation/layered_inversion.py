@@ -88,7 +88,7 @@ class LayeredInversion:
         """Create the regularization term."""
         return regularization.WeightedLeastSquares(
             self.regularization_mesh,
-            length_scale_x=10.0,
+            # length_scale_x=10.0,
             reference_model=self.reference_resistivity_model,
             reference_model_in_smooth=False,
         )
