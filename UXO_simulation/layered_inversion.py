@@ -12,15 +12,15 @@ from simpeg import (
 )
 
 class LayeredInversion:
-    def __init__(self, data_object, survey, soil_conductivity, depth_min=0.1, depth_max=3.0, 
-                 geometric_factor=1.2, beta0_ratio=1.0, coolingFactor=2.0, coolingRate=3.0, chifact=1.0):
+    def __init__(self, data_object, survey, referece_conductivity, depth_min=0.1, depth_max=3.0, 
+                 geometric_factor=1.2, beta0_ratio=1.0, coolingFactor=1.5, coolingRate=2.0, chifact=1.0):
         """
         Initializes the LayeredInversion class with necessary parameters and configurations.
         
         Parameters:
         - data_object: Instance of SimPEG data.Data containing observed data and noise floor.
         - survey: The survey object for the simulation.
-        - soil_conductivity: Soil conductivity value for setting up the starting model.
+        - referece_conductivity: Soil conductivity value for setting up the starting model.
         - log_conductivity_map: Mapping for the conductivity model (typically an instance of maps.ExpMap).
         - depth_min: Minimum thickness of the top layer (default is 0.1).
         - depth_max: Maximum depth to the lowest layer (default is 3.0).
@@ -29,7 +29,7 @@ class LayeredInversion:
         """
         self.data_object = data_object
         self.survey = survey
-        self.soil_conductivity = soil_conductivity
+        self.referece_conductivity = referece_conductivity
         self.depth_min = depth_min
         self.depth_max = depth_max
         self.geometric_factor = geometric_factor
@@ -44,9 +44,9 @@ class LayeredInversion:
         self.layer_thicknesses = None
         self.regularization_mesh = None
         self.starting_model = None
-        self.reference_resistivity_model = None
+        self.reference_conductivity_model = None
         self.simulation = None
-        self.inv_L2 = None
+        self.inv = None
 
         # Automatically set up layers, mesh, model, and simulation
         self.setup_layer_thicknesses()
@@ -67,11 +67,11 @@ class LayeredInversion:
         self.regularization_mesh = TensorMesh([h], "N")
 
     def setup_starting_model(self):
-        """Define the starting model, conductivity map, and reference resistivity model."""
+        """Define the starting model, conductivity map, and reference conductivity model."""
         n_layers = len(self.layer_thicknesses) + 1
-        self.starting_model = np.log(self.soil_conductivity * np.ones(n_layers))
+        self.starting_model = np.log(self.referece_conductivity * np.ones(n_layers))
         self.log_conductivity_map = ExpMap(nP=n_layers)
-        self.reference_resistivity_model = self.starting_model.copy()
+        self.reference_conductivity_model = self.starting_model.copy()
     
     def setup_simulation(self):
             """Initialize the 1D layered simulation."""
@@ -86,11 +86,12 @@ class LayeredInversion:
 
     def create_regularization(self):
         """Create the regularization term."""
-        return regularization.WeightedLeastSquares(
-            self.regularization_mesh,
-            length_scale_x=10.0,
-            reference_model=self.reference_resistivity_model,
-            reference_model_in_smooth=False,
+        return regularization.Sparse(
+            mesh=self.regularization_mesh,
+            reference_model=self.reference_conductivity_model,
+            alpha_s=1e-3,
+            alpha_x=1e-1,
+            norms=[1, 0.5],
         )
 
     def create_optimization(self):
@@ -108,23 +109,25 @@ class LayeredInversion:
             coolingRate=self.coolingRate
         )
         target_misfit = directives.TargetMisfit(chifact=self.chifact)
+        sensitivity_weights = directives.UpdateSensitivityWeights()
 
-        return [update_jacobi, starting_beta, beta_schedule, target_misfit]
+        return [sensitivity_weights, update_jacobi, starting_beta, beta_schedule, target_misfit]
 
     def setup_inversion(self):
         """Set up the inversion problem using the misfit, regularization, and optimization."""
-        dmis_L2 = self.create_misfit_term()
-        reg_L2 = self.create_regularization()
-        opt_L2 = self.create_optimization()
+        dmis = self.create_misfit_term()
+        reg = self.create_regularization()
+        reg.depth_weighting = True
+        opt = self.create_optimization()
         
         # Create the inverse problem
-        inv_prob_L2 = inverse_problem.BaseInvProblem(dmis_L2, reg_L2, opt_L2)
+        inv_prob = inverse_problem.BaseInvProblem(dmis, reg, opt)
         
         # Attach directives
-        directives_list_L2 = self.create_directives()
+        directives_list = self.create_directives()
         
         # Define the inversion with the problem and directives
-        self.inv_L2 = inversion.BaseInversion(inv_prob_L2, directives_list_L2)
+        self.inv = inversion.BaseInversion(inv_prob, directives_list)
 
     def run_inversion(self, starting_model=None):
         """
@@ -136,8 +139,8 @@ class LayeredInversion:
         Returns:
         - Recovered model from the inversion.
         """
-        if self.inv_L2 is None:
+        if self.inv is None:
             self.setup_inversion()
         
         # Run the inversion and return the model
-        return self.inv_L2.run(starting_model if starting_model is not None else self.starting_model)
+        return self.inv.run(starting_model if starting_model is not None else self.starting_model)
