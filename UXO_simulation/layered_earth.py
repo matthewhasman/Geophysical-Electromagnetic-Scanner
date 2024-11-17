@@ -40,8 +40,8 @@ class Layered_Earth:
         """
         intersects = self.uxo_object.get_vertical_intersects(pt[0], pt[1])
         if intersects is None:
-            layer_thicknesses = [3] # Depth of survey for plotting
-            layer_conductivities = [self.background_conductivity]
+            layer_thicknesses = np.array([])
+            layer_conductivities = np.array([self.background_conductivity])
         else:
             layer_thicknesses = np.abs(np.array(intersects))
             layer_conductivities = np.r_[self.background_conductivity,
