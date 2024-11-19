@@ -90,8 +90,8 @@ class LayeredInversion:
             mesh=self.regularization_mesh,
             reference_model=self.reference_conductivity_model,
             alpha_s=1e-3,
-            alpha_x=1e-1,
-            norms=[1, 0.5],
+            alpha_x=1e-2,
+            norms=[1, 0.1],
         )
 
     def create_optimization(self):
