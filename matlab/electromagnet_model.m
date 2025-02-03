@@ -67,7 +67,6 @@ current = squeeze(current);
 fprintf('Peak Current: %.6f Amps\n', max(current));
 
 % calculate noise floor seen at the Rx coil
-noise_floor = magnetic_snd * w * N2 * A2;
 noise_floor = 10^(-100/20) * ones(1,length(w)); % Measured value maxxing out at -72 dbV
 
 % calculated divergence factor of between coils and dipoles for
@@ -85,6 +84,9 @@ voltage_secondary = squeeze(voltage_secondary);
 
 [voltage_combined, phase_combined] = bode(rx_secondary_tf + (rx_primary_tf  * bucking_constant), w);
 voltage_combined = squeeze(voltage_combined);
+
+[voltage_bucked, phase_bucked] = bode(rx_primary_tf  * bucking_constant, w);
+voltage_bucked = squeeze(voltage_combined);
 
 
 [hs_hp, phase] = bode(secondary_response_tf, w);
