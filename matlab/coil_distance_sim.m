@@ -15,8 +15,8 @@ I_magnitude_tx = 1; % Current in RX coil (Amps)
 I_magnitude_bucking = -1; % Current in bucking coil (opposite direction)
 
 % Define sweep parameters
-bucking_positions = 0.2:0.005:0.3; % Array of positions to test
-rx_radii = [0.05, 0.12, 0.15]; % Different RX coil radii to test
+bucking_positions = 0.15:0.005:0.25; % Array of positions to test
+rx_radii = [0.05]; % Different RX coil radii to test
 bucking_ratios = zeros(length(rx_radii), length(bucking_positions)); % Array to store results
 
 tx_center = 0.85;

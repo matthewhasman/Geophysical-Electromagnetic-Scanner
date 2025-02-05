@@ -41,7 +41,7 @@ tf_den = [L R];
 load('data_real_imag.mat')
 response_hs_hp = data_real + 1j * data_imag;
 
-data = idfrd(response_hs_hp, 2*pi*frequencies, 0, 'FrequencyUnit', 'Hz'); % '0' indicates zero delay
+data = idfrd(response_hs_hp, frequencies, 0, 'FrequencyUnit', 'Hz'); % '0' indicates zero delay
 
 % system parameters 
 % Define the order of the system: 1st order (1 numerator, 1 denominator)

@@ -1,5 +1,5 @@
 % Load the data from CSV file
-data = readtable('NetworkAnalyzerOutput-Jan12-Long.csv', 'FileType', 'delimitedtext', ...
+data = readtable('NetworkAnalyzerOutput-Jan15-Secondary.csv', 'FileType', 'delimitedtext', ...
     'HeaderLines', 19, 'NumHeaderLines', 0);
 data = rmmissing(data);
 % Extract frequency and measurements
@@ -13,7 +13,7 @@ tx_linear = 10.^(tx_magnitude/20);
 rx_linear = 10.^(rx_magnitude/20);
 
 % Calculate transfer function (normalize to 1V source)
-transfer_magnitude = rx_linear ./ tx_linear;
+transfer_magnitude = rx_linear ./ 20;
 transfer_magnitude_db = 20*log10(transfer_magnitude);
 
 % Load electromagnet_model parameters and run simulation
@@ -31,10 +31,10 @@ rx_primary_tf_db = 20*log10(rx_primary_tf_response);
 figure;
 
 % Plot magnitude response
-subplot(3,1,1);
-semilogx(frequencies_measured, transfer_magnitude_db, 'b.', 'DisplayName', 'Measured');
+subplot(2,1,1);
+semilogx(frequencies_measured, transfer_magnitude_db, 'b.', 'DisplayName', 'Measured Primary', LineWidth=2);
 hold on;
-semilogx(w/(2*pi), rx_secondary_tf_db, 'r-', 'DisplayName', 'Model');
+semilogx(w/(2*pi), rx_primary_tf_db, 'r-', 'DisplayName', 'Model');
 grid on;
 xlabel('Frequency (Hz)');
 ylabel('Magnitude (dB)');
@@ -42,8 +42,8 @@ title('Measured vs Model Transfer Function');
 legend;
 
 % Plot phase response
-subplot(3,1,2);
-semilogx(frequencies_measured, rx_phase, 'b.', 'DisplayName', 'Measured');
+subplot(2,1,2);
+semilogx(frequencies_measured, rx_phase, 'b.', 'DisplayName', 'Measured Primary', LineWidth=2);
 hold on;
 [~, phase_model] = bode(rx_secondary_tf, w);
 [~, primary_phase] = bode(rx_primary_tf, w);
@@ -55,7 +55,7 @@ xlabel('Frequency (Hz)');
 ylabel('Phase (degrees)');
 legend;
 % Set frequency cutoff
-freq_cutoff = 20000; % 100 kHz cutoff - adjust as needed
+freq_cutoff = 100000; % 100 kHz cutoff - adjust as needed
 
 % Filter out high frequencies
 freq_mask = frequencies_measured <= freq_cutoff;
@@ -87,11 +87,11 @@ theoretical_ratio = theoretical_complex ./ primary_complex;
 
 % Plot the results
 subplot(3,1,3);
-semilogx(frequencies_measured, real(measured_ratio) * 1e6, 'r.', 'DisplayName', 'Real');
+semilogx(frequencies_measured, real(measured_ratio), 'r.', 'DisplayName', 'Real');
 hold on;
-semilogx(frequencies_measured, imag(measured_ratio)* 1e6, 'b.', 'DisplayName', 'Imaginary');
+semilogx(frequencies_measured, imag(measured_ratio), 'b.', 'DisplayName', 'Imaginary');
 grid on;
 xlabel('Frequency (Hz)');
-ylabel('H_s / H_p (PPM)');
+ylabel('H_s / H_p ');
 title('Secondary to Primary Field Ratio');
 legend;
