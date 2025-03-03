@@ -14,14 +14,26 @@ a_Rx = r_Rx^2 * pi;
 
 tx_tf = tf(1, [L_Tx res_Tx]) * 1;
 
-rx_primary_tf = tf([ -N_Tx*N_Rx*a_Tx*a_Rx,0],coil_distance^3) * tx_tf * 1e-7 ;
+% Add in terms to describe Rx coil
+L = 7e-3;       % Inductance: 7 mH
+C = 2.02e-10;
+R_coil = 31;    % Coil resistance: 31 ohms
+R_load = 1e6;   % Load resistance: 1 MOhm
+R = (R_coil * R_load) / (R_coil + R_load);
+%R = R_coil + R_load;
+omega_0 = 1 / sqrt(L * C);
+Q = (1/R) * sqrt(L / C);
+
+H = tf(omega_0^2, [1, omega_0/Q, omega_0^2]);
+
+rx_primary_tf = tf([ -N_Tx*N_Rx*a_Tx*a_Rx,0],coil_distance^3) * tx_tf * 1e-7 * H;
 
 % Convert primary measurement to linear units 
 primary_linear = 10.^(primary_magnitude ./ 20);
 primary_complex = primary_linear .* exp(1j * deg2rad(primary_phase));
 
 % Set frequency cutoff
-freq_cutoff = 20000; % 20 kHz cutoff - adjust as needed
+freq_cutoff = 1500; % 20 kHz cutoff - adjust as needed
 
 % Filter out high frequencies
 freq_mask = primary_frequency <= freq_cutoff;
@@ -35,15 +47,15 @@ primary_estimate_tf = tfest(data, 1, 1);
 
 % Generate frequency vector in rad/s
 
-plot_frequency = primary_frequency(freq_mask);
-plot_magnitude = primary_magnitude(freq_mask);
-plot_phase = primary_phase(freq_mask);
+plot_frequency = primary_frequency;
+plot_magnitude = primary_magnitude;
+plot_phase = primary_phase;
 
 w = 2 * pi * plot_frequency;
 
 % Compute frequency responses
 [mag1, phase1] = bode(rx_primary_tf, w);
-[mag2, phase2] = bode(primary_estimate_tf, w);
+[mag2, phase2] = bode(primary_estimate_tf * H, w);
 
 % Squeeze 3D arrays to vectors
 mag1 = squeeze(mag1);
@@ -86,7 +98,7 @@ xlim([min(plot_frequency), max(plot_frequency)]);
 % Adjust layout
 sgtitle('Fitting Data to Model');
 
-save('primary_curve_fit.mat', "primary_estimate_tf");
-num = primary_estimate_tf.Numerator;
-den = primary_estimate_tf.Denominator;
-save('primary_curve_fit_python.mat', 'num', 'den');
+% save('primary_curve_fit.mat', "primary_estimate_tf");
+% num = primary_estimate_tf.Numerator;
+% den = primary_estimate_tf.Denominator;
+% save('primary_curve_fit_python.mat', 'num', 'den');

@@ -49,7 +49,7 @@ def initialize_hardware(max_retries=5, retry_delay=1):
             dwf.FDwfAnalogOutConfigure(hdwf, c_int(0), c_int(1))
 
             # Configure Scope
-            nSamples = 2**17
+            nSamples = 2**16
             dwf.FDwfAnalogInFrequencySet(hdwf, c_double(20000000.0))
             dwf.FDwfAnalogInBufferSizeSet(hdwf, nSamples)
             dwf.FDwfAnalogInChannelEnableSet(hdwf, 0, c_int(1))
@@ -112,7 +112,7 @@ def main():
         steps = st.number_input(
             "Number of Steps", 
             min_value=4, 
-            max_value=50, 
+            max_value=1000, 
             value=16, 
             step=1
         )

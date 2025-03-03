@@ -74,6 +74,22 @@ noise_floor = 10^(-100/20) * ones(1,length(w)); % Measured value maxxing out at 
 geometric_factor = 1.0;
 
 rx_primary_tf = tf([ -N*N2*A*A2,0],coil_distance^3) * tx_tf * 1e-7 * geometric_factor;
+
+% Add in terms to describe Rx coil
+L = 7e-3;       % Inductance: 7 mH
+C = 2.02e-10;
+R_coil = 31;    % Coil resistance: 31 ohms
+R_load = 1e6;   % Load resistance: 1 MOhm
+R = (R_coil * R_load) / (R_coil + R_load);
+%R = R_coil + R_load;
+omega_0 = 1 / sqrt(L * C);
+Q = (1/R) * sqrt(L / C);
+
+H = tf(omega_0^2, [1, omega_0/Q, omega_0^2]);
+rx_primary_tf = rx_primary_tf * H;
+fprintf('Cutoff frequency: %.2f Hz\n', omega_0/(2*pi));
+fprintf('Q factor: %.2f\n', Q);
+
 [voltage_primary, phase_primary] = bode(rx_primary_tf, w);
 voltage_primary = squeeze(voltage_primary);
 phase_primary = squeeze(phase_primary);
