@@ -102,7 +102,8 @@ class DiffusionModel(nn.Module):
         # Encoder (downsampling path)
         self.encoder_blocks = nn.ModuleList()
         current_channels = 1  # Start with single channel for noise
-        
+        channel_sizes = []
+
         for i, mult in enumerate(channel_mults):
             out_channels = base_channels * mult
             
@@ -123,6 +124,7 @@ class DiffusionModel(nn.Module):
                     nn.Conv3d(out_channels, out_channels, kernel_size=4, stride=2, padding=1)
                 )
             
+            channel_sizes.append(current_channels)
             current_channels = out_channels
         
         # Middle block
@@ -135,6 +137,8 @@ class DiffusionModel(nn.Module):
             nn.SiLU()
         )
         
+        channel_sizes.append(current_channels)
+
         # Decoder (upsampling path)
         self.decoder_blocks = nn.ModuleList()
         
@@ -164,6 +168,7 @@ class DiffusionModel(nn.Module):
                 )
             )
             
+            channel_sizes.append(current_channels)
             current_channels = out_channels
         
         # Output layer
@@ -174,13 +179,13 @@ class DiffusionModel(nn.Module):
             nn.Conv3d(current_channels, 1, kernel_size=1)
         )
         
-        # Condition injection layers
+        # Condition injection layers TODO Fix this the channel numbers are broken
         self.cond_injectors = nn.ModuleList()
-        for _ in range(len(channel_mults) * 2 + 1):  # For each encoder, middle, and decoder block
+        for channel_size in channel_sizes:  # For each encoder, middle, and decoder block
             self.cond_injectors.append(
                 nn.Sequential(
                     nn.SiLU(),
-                    nn.Linear(512, current_channels)
+                    nn.Linear(512, channel_size)
                 )
             )
     
@@ -842,3 +847,5 @@ if __name__ == "__main__":
         n_samples=5,
         n_steps=args.sample_steps
     )
+
+    ## Testing Command: python train_inversion_diffusion.py --dataset em_dataset/em_dataset.h5
