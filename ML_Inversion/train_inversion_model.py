@@ -33,6 +33,7 @@ from datasets.em_dataset import EMDataset, load_dataset
 # Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
 class TimeDistributed(nn.Module):
     """
     Applies a module to each timestep of a sequence
@@ -56,11 +57,63 @@ class TimeDistributed(nn.Module):
         
         return y
 
+def sinusoidal_2d_embedding(height, width, channels=32):
+    """
+    Generate 2D sinusoidal positional embeddings
+    
+    Parameters:
+    -----------
+    height : int
+        Height of the input grid
+    width : int
+        Width of the input grid
+    channels : int
+        Number of channels in the embedding (must be even)
+        
+    Returns:
+    --------
+    embeddings : torch.Tensor
+        Positional embeddings of shape (height, width, channels)
+    """
+    if channels % 2 != 0:
+        raise ValueError("Number of channels must be even")
+    
+    # Create position indices
+    y_positions = torch.arange(height).float()
+    x_positions = torch.arange(width).float()
+    
+    # Scale positions to be between 0 and 1
+    y_positions = y_positions / max(height - 1, 1)
+    x_positions = x_positions / max(width - 1, 1)
+    
+    # Create a grid of positions
+    grid_y, grid_x = torch.meshgrid(y_positions, x_positions, indexing='ij')
+    
+    # Calculate frequency bands
+    half_channels = channels // 2
+    freq_bands = torch.arange(half_channels).float()
+    freq_bands = 10000 ** (2 * freq_bands / half_channels)
+    
+    # Calculate embeddings
+    embeddings = torch.zeros(height, width, 2*channels)
+    
+    # For each frequency band
+    for i in range(half_channels):
+        # Calculate sine and cosine embeddings for y-coordinates
+        embeddings[:, :, i] = torch.sin(grid_y * freq_bands[i])
+        embeddings[:, :, i + half_channels] = torch.cos(grid_y * freq_bands[i])
+        
+        # Calculate sine and cosine embeddings for x-coordinates
+        embeddings[:, :, i + channels] = torch.sin(grid_x * freq_bands[i])
+        embeddings[:, :, i + channels + half_channels] = torch.cos(grid_x * freq_bands[i])
+    
+    return embeddings
+
 class CNNLSTMModel(nn.Module):
     """
     CNN-LSTM model for electromagnetic inversion
     """
-    def __init__(self, input_shape, n_outputs):
+    def __init__(self, input_shape, n_outputs, use_positional_encoding=False, pos_encoding_channels=8):
         """
         Initialize the model
         
@@ -70,15 +123,28 @@ class CNNLSTMModel(nn.Module):
             Shape of the input data (n_freqs, height, width, 2)
         n_outputs : int
             Number of parameters to predict
+        use_positional_encoding : bool
+            Whether to use 2D sinusoidal positional encoding
+        pos_encoding_channels : int
+            Number of channels for positional encoding (must be even)
         """
         super(CNNLSTMModel, self).__init__()
         
         n_freqs, height, width, channels = input_shape
+        self.use_positional_encoding = use_positional_encoding
+        
+        # Calculate input channels with positional encoding
+        input_channels = channels
+        if use_positional_encoding:
+            input_channels += 2 * pos_encoding_channels
+            # Generate positional encodings
+            pos_encodings = sinusoidal_2d_embedding(height, width, pos_encoding_channels)
+            self.register_buffer('pos_encodings', pos_encodings)
         
         # CNN feature extractor (applied to each frequency)
         self.cnn_layers = nn.Sequential(
             # First convolutional block
-            nn.Conv2d(channels, 32, kernel_size=3, padding=1),
+            nn.Conv2d(input_channels, 32, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.BatchNorm2d(32),
             nn.MaxPool2d(kernel_size=2),
@@ -102,7 +168,7 @@ class CNNLSTMModel(nn.Module):
         # Calculate CNN output size
         with torch.no_grad():
             # Create a dummy input to get output size
-            dummy_input = torch.zeros(1, channels, height, width)
+            dummy_input = torch.zeros(1, input_channels, height, width)
             cnn_output = self.cnn_layers(dummy_input)
             cnn_output_size = cnn_output.size(1)
         
@@ -148,6 +214,12 @@ class CNNLSTMModel(nn.Module):
         for i in range(n_freqs):
             # Extract current frequency data and permute for CNN
             freq_data = x[:, i]  # shape: (batch_size, height, width, channels)
+            
+            if self.use_positional_encoding:
+                # Add positional encodings
+                pos_enc = self.pos_encodings.unsqueeze(0).repeat(batch_size, 1, 1, 1)
+                freq_data = torch.cat([freq_data, pos_enc], dim=-1)
+            
             freq_data = freq_data.permute(0, 3, 1, 2)  # shape: (batch_size, channels, height, width)
             
             # Apply CNN
@@ -248,7 +320,7 @@ def train_model(data_dict, model_dir, epochs=100, batch_size=16, lr=0.001, plot_
     # Initialize best validation loss
     best_val_loss = float('inf')
     patience_counter = 0
-    patience = 20  # Early stopping patience
+    patience = 100  # Early stopping patience
     
     # Training loop
     for epoch in range(epochs):
@@ -528,11 +600,12 @@ if __name__ == "__main__":
     parser.add_argument('--val_split', type=float, default=0.2, help='Validation split ratio')
     parser.add_argument('--test_split', type=float, default=0.1, help='Test split ratio')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
+    parser.add_argument('--masked', action='store_true', help='Use masked dataset for training')
     
     args = parser.parse_args()
     
     # Load and preprocess the dataset
-    data_dict = load_dataset(args.dataset, args.val_split, args.test_split)
+    data_dict = load_dataset(args.dataset, args.val_split, args.test_split, masked=args.masked)
     
     # Train the model
     model, history = train_model(
@@ -546,4 +619,4 @@ if __name__ == "__main__":
     # Evaluate the model
     evaluate_model(model, data_dict, args.model_dir)
     ## Example Usage:
-    # python train_inversion_model.py --dataset em_dataset/em_dataset.h5 --model_dir em_model_pytorch --epochs 150 --batch_size 16 --lr 0.001
+    # python train_inversion_model.py --dataset em_dataset/em_dataset.h5 --model_dir em_model_pytorch --epochs 150 --batch_size 16 --lr 0.001 --masked true

@@ -25,7 +25,7 @@ import os
 import h5py
 import time
 import warnings
-from create_conductivity_map import create_cylinder_conductivity_map
+from datasets.create_conductivity_map import create_cylinder_conductivity_map
 
 # Define the functions from the original code
 def mind(x, y, z, dincl, ddecl, x0, y0, z0, aincl, adecl):

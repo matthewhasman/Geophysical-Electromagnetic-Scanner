@@ -30,7 +30,82 @@ class EMDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.Y[idx]
 
-def load_dataset(dataset_path, val_split=0.2, test_split=0.1):
+class MaskedEMDataset(Dataset):
+    """
+    Dataset class for electromagnetic inversion data with random masking
+    """
+    def __init__(self, X, Y, mask_prob=0.2, mask_size_range=(0.1, 0.3)):
+        """
+        Initialize the dataset with random masking
+        
+        Parameters:
+        -----------
+        X : numpy.ndarray
+            Input data (n_samples, n_freqs, height, width, 2)
+        Y : numpy.ndarray
+            Target parameters (n_samples, n_params)
+        mask_prob : float
+            Probability of applying a mask to each sample
+        mask_size_range : tuple
+            Range of mask sizes as a fraction of the input dimensions (min, max)
+        """
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.Y = torch.tensor(Y, dtype=torch.float32)
+        self.mask_prob = mask_prob
+        self.mask_size_range = mask_size_range
+    
+    def __len__(self):
+        return len(self.X)
+    
+    def apply_random_mask(self, x):
+        """
+        Apply random rectangular mask to the input data
+        
+        Parameters:
+        -----------
+        x : torch.Tensor
+            Input data tensor of shape (n_freqs, height, width, 2)
+            
+        Returns:
+        --------
+        masked_x : torch.Tensor
+            Masked input data
+        """
+        # Make a copy of the input
+        masked_x = x.clone()
+        
+        # Get dimensions
+        n_freqs, height, width, _ = x.shape
+        
+        # Determine mask size
+        min_size, max_size = self.mask_size_range
+        mask_height = int(np.random.uniform(min_size, max_size) * height)
+        mask_width = int(np.random.uniform(min_size, max_size) * width)
+        
+        # Determine mask position
+        top = np.random.randint(0, height - mask_height + 1)
+        left = np.random.randint(0, width - mask_width + 1)
+        
+        # Apply mask (set values to zero)
+        # Randomly choose which frequencies to mask (can be all or a subset)
+        freqs_to_mask = np.random.randint(1, n_freqs + 1)  # At least one frequency
+        freq_indices = np.random.choice(n_freqs, freqs_to_mask, replace=False)
+        
+        for freq_idx in freq_indices:
+            masked_x[freq_idx, top:top+mask_height, left:left+mask_width, :] = 0.0
+            
+        return masked_x
+    
+    def __getitem__(self, idx):
+        x = self.X[idx]
+        
+        # Apply mask with probability mask_prob
+        if np.random.random() < self.mask_prob:
+            x = self.apply_random_mask(x)
+            
+        return x, self.Y[idx]
+
+def load_dataset(dataset_path, val_split=0.2, test_split=0.1, masked=False):
     """
     Load the dataset from an HDF5 file and split into train/val/test sets
     
@@ -84,10 +159,16 @@ def load_dataset(dataset_path, val_split=0.2, test_split=0.1):
     X_val, X_test, Y_val, Y_test = train_test_split(X_temp, Y_temp, test_size=test_split/(val_split+test_split), random_state=42)
     
     # Create datasets
-    train_dataset = EMDataset(X_train, Y_train)
-    val_dataset = EMDataset(X_val, Y_val)
-    test_dataset = EMDataset(X_test, Y_test)
-    
+    if masked == False:
+        train_dataset = EMDataset(X_train, Y_train)
+        val_dataset = EMDataset(X_val, Y_val)
+        test_dataset = EMDataset(X_test, Y_test)
+
+    else:
+        train_dataset = MaskedEMDataset(X_train, Y_train, mask_prob=0.2, mask_size_range=(0.1, 0.3))
+        val_dataset = EMDataset(X_val, Y_val)
+        test_dataset = EMDataset(X_test, Y_test)
+        
     # Create data dictionary
     data_dict = {
         'train_dataset': train_dataset,

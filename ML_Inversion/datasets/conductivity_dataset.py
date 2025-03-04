@@ -3,7 +3,7 @@ import torch
 import h5py
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
-from create_conductivity_map import create_cylinder_conductivity_map
+from .create_conductivity_map import create_cylinder_conductivity_map
 from tqdm import tqdm
 
 class ConductivityMapDataset(Dataset):
