@@ -97,7 +97,7 @@ def main():
         st.header("Frequency Sweep Parameters")
         start_freq = st.number_input(
             "Start Frequency (Hz)", 
-            min_value=1.0, 
+            min_value=1000.0, 
             max_value=10000.0, 
             value=1000.0, 
             step=1.0
@@ -148,6 +148,17 @@ def main():
     den = mat['den'].tolist()[0]
     sys = control.TransferFunction(num, den)
     
+    # Add in RX coil response
+    L = 7e-3
+    C = 2.02e-10
+    R_Coil = 31
+    R_Load  = 1e6
+    R = (R_Coil * R_Load) / (R_Coil + R_Load)
+    omega_0 = 1 / numpy.sqrt(L * C)
+    Q = (1/R) * numpy.sqrt(L / C)
+    H_rx = control.TransferFunction([omega_0**2], [1, omega_0/Q, omega_0**2])
+    sys = sys * H_rx
+
     # Setup plotting
     fig, (ax1, ax2, ax3) = setup_plotting()
     lines = {}
@@ -196,9 +207,9 @@ def main():
                 c2_mag, c2_phase = process_data(rgdSamples2)
                 
                 if c1_mag > 0:
-                    c1_mag *= 10  # 10x probe attenuation
-                    h_db = 20 * math.log10(c2_mag / c1_mag)
-                    h_linear = c2_mag / c1_mag
+                    c1_mag *= 1  # 10x probe attenuation
+                    h_db = 20 * math.log10(c2_mag * 20)
+                    h_linear = c2_mag * 20
                     phase_diff = (c2_phase - c1_phase) * 180 / math.pi
                     phase_diff = (phase_diff + 180) % 360 - 180
                     

@@ -1,4 +1,4 @@
-[primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("NetworkAnalyzerOutput-Jan15-Primary.csv", 20);
+[primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("Primary_Battery.csv", 20);
 % TX coil parameters (Initial Guess)
 res_Tx = 4; % Ohms
 L_Tx = 0.001; % Henries
@@ -16,14 +16,15 @@ tx_tf = tf(1, [L_Tx res_Tx]) * 1;
 
 % Add in terms to describe Rx coil
 L = 7e-3;       % Inductance: 7 mH
-C = 2.02e-10;
+%C = 2.02e-10;
 R_coil = 31;    % Coil resistance: 31 ohms
 R_load = 1e6;   % Load resistance: 1 MOhm
 R = (R_coil * R_load) / (R_coil + R_load);
 %R = R_coil + R_load;
-omega_0 = 1 / sqrt(L * C);
+%omega_0 = 1 / sqrt(L * C);
+omega_0 = 187834 * 2 * pi;
+C = L/omega_0^2;
 Q = (1/R) * sqrt(L / C);
-
 H = tf(omega_0^2, [1, omega_0/Q, omega_0^2]);
 
 rx_primary_tf = tf([ -N_Tx*N_Rx*a_Tx*a_Rx,0],coil_distance^3) * tx_tf * 1e-7 * H;
@@ -67,11 +68,17 @@ phase2 = squeeze(phase2);
 mag1_db = 20*log10(mag1);
 mag2_db = 20*log10(mag2);
 
+% Compute frequency response without h
+[mag3, phase3] = bode(primary_estimate_tf, w);
+mag3 = squeeze(mag3);
+phase3 = squeeze(phase3);
+mag3_db = 20*log10(mag3);
+
 % Create figure
 figure;
 
 % Magnitude plot
-subplot(2,1,1);
+subplot(3,1,1);
 semilogx(plot_frequency, mag1_db, 'b', 'LineWidth', 1.5);
 hold on;
 semilogx(plot_frequency, mag2_db, 'k--', 'LineWidth', 1.5);
@@ -84,7 +91,7 @@ grid on;
 xlim([min(plot_frequency), max(plot_frequency)]);
 
 % Phase plot
-subplot(2,1,2);
+subplot(3,1,2);
 semilogx(plot_frequency, phase1, 'b', 'LineWidth', 1.5);
 hold on;
 semilogx(plot_frequency, phase2, 'k--', 'LineWidth', 1.5);
@@ -94,6 +101,9 @@ ylabel('Phase (degrees)');
 legend('Theoretical Model', 'Estimated Model', 'Recorded Values');
 grid on;
 xlim([min(plot_frequency), max(plot_frequency)]);
+
+subplot(3,1,3);
+semilogx(plot_frequency, plot_magnitude - mag3_db, 'r', 'LineWidth', 1.5);
 
 % Adjust layout
 sgtitle('Fitting Data to Model');
