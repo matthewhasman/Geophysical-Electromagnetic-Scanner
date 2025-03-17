@@ -2,17 +2,14 @@ from ctypes import *
 from dwfconstants import *
 import math
 import time
-import matplotlib.pyplot as plt
-import sys
 import numpy
-import control
 import scipy
+import control
 from control.matlab import ss, bode
-#import keyboard  # You may need to: pip install keyboard
-import streamlit as st
-
-# Enable interactive plotting
-plt.ion()
+import sys
+from PyQt5 import QtWidgets, QtCore, QtGui
+import pyqtgraph as pg
+import numpy as np
 
 if sys.platform.startswith("win"):
     dwf = cdll.dwf
@@ -21,269 +18,357 @@ elif sys.platform.startswith("darwin"):
 else:
     dwf = cdll.LoadLibrary("libdwf.so")
 
-def initialize_hardware(max_retries=5, retry_delay=1):
-    """Try to initialize hardware with retries
-    Args:
-        max_retries (int): Maximum number of connection attempts
-        retry_delay (float): Delay in seconds between retries
-    """
-    for attempt in range(max_retries):
-        version = create_string_buffer(16)
-        dwf.FDwfGetVersion(version)
-        print(f"Attempt {attempt + 1}/{max_retries}: DWF Version: {str(version.value)}")
-
-        hdwf = c_int()
-        szerr = create_string_buffer(512)
-        print("Opening first device")
-        if dwf.FDwfDeviceOpen(-1, byref(hdwf)) == 1 and hdwf.value != hdwfNone.value:
-            print("Successfully connected to device")
-            
-            # Device configuration
-            dwf.FDwfParamSet(DwfParamOnClose, c_int(0))
-            dwf.FDwfDeviceAutoConfigureSet(hdwf, c_int(0))
-
-            # Configure AWG
-            dwf.FDwfAnalogOutNodeEnableSet(hdwf, c_int(0), AnalogOutNodeCarrier, c_int(1))
-            dwf.FDwfAnalogOutNodeFunctionSet(hdwf, c_int(0), AnalogOutNodeCarrier, funcSine)
-            dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf, c_int(0), AnalogOutNodeCarrier, c_double(0.5))
-            dwf.FDwfAnalogOutConfigure(hdwf, c_int(0), c_int(1))
-
-            # Configure Scope
-            nSamples = 2**16
-            dwf.FDwfAnalogInFrequencySet(hdwf, c_double(20000000.0))
-            dwf.FDwfAnalogInBufferSizeSet(hdwf, nSamples)
-            dwf.FDwfAnalogInChannelEnableSet(hdwf, 0, c_int(1))
-            dwf.FDwfAnalogInChannelRangeSet(hdwf, 0, c_double(2))
-            dwf.FDwfAnalogInChannelEnableSet(hdwf, 1, c_int(1))
-            dwf.FDwfAnalogInChannelRangeSet(hdwf, 1, c_double(2))
-            
-            return hdwf, nSamples
+class SignalAnalyzerApp(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Live Transfer Function Analysis")
+        self.setGeometry(100, 100, 1200, 800)
         
-        dwf.FDwfGetLastErrorMsg(szerr)
-        print(f"Attempt {attempt + 1} failed: {szerr.value}")
+        # Parameters
+        self.start_freq = 1000.0
+        self.stop_freq = 100000.0
+        self.steps = 16
+        self.frequencies = numpy.logspace(numpy.log10(self.start_freq), numpy.log10(self.stop_freq), num=int(self.steps))
         
-        if attempt < max_retries - 1:  # Don't sleep on the last attempt
-            print(f"Retrying in {retry_delay} seconds...")
-            time.sleep(retry_delay)
-    
-    return None
+        self.sample_rate = 1000000.0
 
-def setup_plotting():
-    # Replace matplotlib figure with streamlit plots
-    fig = plt.figure(figsize=(12, 8))
-    ax1 = fig.add_subplot(311)
-    ax2 = fig.add_subplot(312)
-    ax3 = fig.add_subplot(313)
+        # System Transfer Functions
+        self.setup_transfer_functions()
+        
+        # UI Setup
+        self.setup_ui()
+        
+        # Hardware
+        self.hdwf = None
+        self.nSamples = None
+        self.rgdWindow = None
+        self.vNEBW = c_double()
+        
+        # Data
+        self.current_freq_idx = 0
+        self.h_mag = []
+        self.h_mag_lin = []
+        self.h_phase = []
+        self.frequencies_plot = []
+        
+        # Start
+        self.initialize_hardware()
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update_measurement)
+        self.timer.start(10)  # Update every 10ms (100 Hz)
     
-    ax1.set_ylabel('Magnitude (dB)')
-    ax1.grid(True, which="both", ls="--")
-    ax1.set_title('Transfer Function')
+    def setup_ui(self):
+        # Main widget
+        central_widget = QtWidgets.QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # Main layout
+        main_layout = QtWidgets.QVBoxLayout(central_widget)
+        
+        # Control panel
+        control_panel = QtWidgets.QHBoxLayout()
+        
+        # Start frequency
+        start_freq_layout = QtWidgets.QVBoxLayout()
+        start_freq_label = QtWidgets.QLabel("Start Frequency (Hz):")
+        self.start_freq_input = QtWidgets.QDoubleSpinBox()
+        self.start_freq_input.setRange(100, 10000)
+        self.start_freq_input.setValue(self.start_freq)
+        self.start_freq_input.valueChanged.connect(self.update_parameters)
+        start_freq_layout.addWidget(start_freq_label)
+        start_freq_layout.addWidget(self.start_freq_input)
+        
+        # Stop frequency
+        stop_freq_layout = QtWidgets.QVBoxLayout()
+        stop_freq_label = QtWidgets.QLabel("Stop Frequency (Hz):")
+        self.stop_freq_input = QtWidgets.QDoubleSpinBox()
+        self.stop_freq_input.setRange(1000, 1000000)
+        self.stop_freq_input.setValue(self.stop_freq)
+        self.stop_freq_input.valueChanged.connect(self.update_parameters)
+        stop_freq_layout.addWidget(stop_freq_label)
+        stop_freq_layout.addWidget(self.stop_freq_input)
+        
+        # Steps
+        steps_layout = QtWidgets.QVBoxLayout()
+        steps_label = QtWidgets.QLabel("Number of Steps:")
+        self.steps_input = QtWidgets.QSpinBox()
+        self.steps_input.setRange(4, 1000)
+        self.steps_input.setValue(self.steps)
+        self.steps_input.valueChanged.connect(self.update_parameters)
+        steps_layout.addWidget(steps_label)
+        steps_layout.addWidget(self.steps_input)
+        
+        # Current frequency and magnitude display
+        metrics_layout = QtWidgets.QVBoxLayout()
+        self.current_freq_label = QtWidgets.QLabel("Current Frequency: 0 kHz")
+        self.current_mag_label = QtWidgets.QLabel("Latest Magnitude: 0 dB")
+        metrics_layout.addWidget(self.current_freq_label)
+        metrics_layout.addWidget(self.current_mag_label)
+        
+        # Add all controls to panel
+        control_panel.addLayout(start_freq_layout)
+        control_panel.addLayout(stop_freq_layout)
+        control_panel.addLayout(steps_layout)
+        control_panel.addLayout(metrics_layout)
+        control_panel.addStretch(1)
+        
+        # Add control panel to main layout
+        main_layout.addLayout(control_panel)
+        
+        # Create plots
+        plots_layout = QtWidgets.QVBoxLayout()
+        
+        # Magnitude plot
+        self.magnitude_plot = pg.PlotWidget(title="Transfer Function - Magnitude")
+        self.magnitude_plot.setLabel('left', 'Magnitude', units='dB')
+        self.magnitude_plot.setLabel('bottom', 'Frequency', units='Hz')
+        self.magnitude_plot.setLogMode(x=True, y=False)
+        self.magnitude_plot.showGrid(x=True, y=True)
+        self.measured_mag_curve = self.magnitude_plot.plot(pen='b', name='Measured')
+        self.primary_mag_curve = self.magnitude_plot.plot(pen='r', name='Primary')
+        self.magnitude_plot.addLegend()
+        
+        # Phase plot
+        self.phase_plot = pg.PlotWidget(title="Transfer Function - Phase")
+        self.phase_plot.setLabel('left', 'Phase', units='degrees')
+        self.phase_plot.setLabel('bottom', 'Frequency', units='Hz')
+        self.phase_plot.setLogMode(x=True, y=False)
+        self.phase_plot.showGrid(x=True, y=True)
+        self.measured_phase_curve = self.phase_plot.plot(pen='b', name='Measured')
+        self.primary_phase_curve = self.phase_plot.plot(pen='r', name='Primary')
+        self.phase_plot.addLegend()
+        
+        # hs/hp plot
+        self.hs_hp_plot = pg.PlotWidget(title="hs/hp")
+        self.hs_hp_plot.setLabel('left', 'hs/hp')
+        self.hs_hp_plot.setLabel('bottom', 'Frequency', units='Hz')
+        self.hs_hp_plot.setLogMode(x=True, y=False)
+        self.hs_hp_plot.showGrid(x=True, y=True)
+        self.hs_hp_real_curve = self.hs_hp_plot.plot(pen='b', name='Real')
+        self.hs_hp_imag_curve = self.hs_hp_plot.plot(pen='r', name='Imaginary')
+        self.hs_hp_plot.addLegend()
+        
+        # Add plots to layout
+        plots_layout.addWidget(self.magnitude_plot)
+        plots_layout.addWidget(self.phase_plot)
+        plots_layout.addWidget(self.hs_hp_plot)
+        
+        # Add plots to main layout
+        main_layout.addLayout(plots_layout)
     
-    ax2.set_ylabel('Phase (degrees)')
-    ax2.grid(True, which="both", ls="--")
+    def setup_transfer_functions(self):
+        # Load primary response
+        try:
+            path = "../matlab/primary_curve_fit_python.mat"
+            mat = scipy.io.loadmat(path)
+            num = mat['num'].tolist()[0][0][0]
+            den = mat['den'].tolist()[0][0][0]
+            self.sys = control.TransferFunction(num, den)
+            
+            print("Transfer functions loaded successfully")
+        except Exception as e:
+            print(f"Error loading transfer functions: {e}")
+            self.sys = control.TransferFunction([1], [1])
     
-    ax3.set_xlabel('Frequency (Hz)')
-    ax3.set_ylabel('hs/hp')
-    ax3.grid(True, which="both", ls="--")
+    def initialize_hardware(self, max_retries=5, retry_delay=1):
+        """Try to initialize hardware with retries"""
+        for attempt in range(max_retries):
+            version = create_string_buffer(16)
+            dwf.FDwfGetVersion(version)
+            print(f"Attempt {attempt + 1}/{max_retries}: DWF Version: {str(version.value)}")
+
+            self.hdwf = c_int()
+            szerr = create_string_buffer(512)
+            print("Opening first device")
+            if dwf.FDwfDeviceOpen(-1, byref(self.hdwf)) == 1 and self.hdwf.value != hdwfNone.value:
+                print("Successfully connected to device")
+                
+                # Device configuration
+                dwf.FDwfParamSet(DwfParamOnClose, c_int(0))
+                dwf.FDwfDeviceAutoConfigureSet(self.hdwf, c_int(0))
+
+                # Configure AWG
+                dwf.FDwfAnalogOutNodeEnableSet(self.hdwf, c_int(0), AnalogOutNodeCarrier, c_int(1))
+                dwf.FDwfAnalogOutNodeFunctionSet(self.hdwf, c_int(0), AnalogOutNodeCarrier, funcSine)
+                dwf.FDwfAnalogOutNodeAmplitudeSet(self.hdwf, c_int(0), AnalogOutNodeCarrier, c_double(0.5))
+                dwf.FDwfAnalogOutConfigure(self.hdwf, c_int(0), c_int(1))
+
+                # Configure Scope
+                self.nSamples = 2**16
+                dwf.FDwfAnalogInFrequencySet(self.hdwf, c_double(self.sample_rate))
+                dwf.FDwfAnalogInBufferSizeSet(self.hdwf, self.nSamples)
+                dwf.FDwfAnalogInChannelEnableSet(self.hdwf, 0, c_int(1))
+                dwf.FDwfAnalogInChannelRangeSet(self.hdwf, 0, c_double(2))
+                dwf.FDwfAnalogInChannelEnableSet(self.hdwf, 1, c_int(1))
+                dwf.FDwfAnalogInChannelRangeSet(self.hdwf, 1, c_double(2))
+                
+                # Setup FFT window
+                self.rgdWindow = (c_double * self.nSamples)()
+                vBeta = c_double(1.0)
+                dwf.FDwfSpectrumWindow(byref(self.rgdWindow), c_int(self.nSamples), DwfWindowFlatTop, vBeta, byref(self.vNEBW))
+                
+                return True
+            
+            dwf.FDwfGetLastErrorMsg(szerr)
+            print(f"Attempt {attempt + 1} failed: {szerr.value}")
+            
+            if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+        
+        return False
     
-    plt.tight_layout()
-    return fig, (ax1, ax2, ax3)
+    def update_parameters(self):
+        """Update sweep parameters from UI inputs"""
+        self.start_freq = self.start_freq_input.value()
+        self.stop_freq = self.stop_freq_input.value()
+        self.steps = self.steps_input.value()
+        self.frequencies = numpy.logspace(numpy.log10(self.start_freq), numpy.log10(self.stop_freq), num=int(self.steps))
+        
+        # Reset measurements
+        self.current_freq_idx = 0
+        self.h_mag = []
+        self.h_mag_lin = []
+        self.h_phase = []
+        self.frequencies_plot = []
+    
+    def update_measurement(self):
+        """Perform a single frequency measurement and update the display"""
+        if self.hdwf is None or self.current_freq_idx >= len(self.frequencies):
+            self.current_freq_idx = 0
+            self.h_mag = []
+            self.h_mag_lin = []
+            self.h_phase = []
+            self.frequencies_plot = []
+        
+        # Get current frequency
+        freq = self.frequencies[self.current_freq_idx]
+        print(f"\rFrequency: {freq/1e3:.1f} kHz", end='')
+        
+        # Set frequency and acquire data
+        dwf.FDwfAnalogOutNodeFrequencySet(self.hdwf, c_int(0), AnalogOutNodeCarrier, c_double(freq))
+        dwf.FDwfAnalogOutConfigure(self.hdwf, c_int(0), c_int(1))
+        dwf.FDwfAnalogInConfigure(self.hdwf, c_int(1), c_int(1))
+        
+        # Wait for acquisition
+        while True:
+            sts = c_byte()
+            dwf.FDwfAnalogInStatus(self.hdwf, c_int(1), byref(sts))
+            if sts.value == DwfStateDone.value:
+                break
+            time.sleep(0.001)
+            QtWidgets.QApplication.processEvents()  # Keep UI responsive
+        
+        # Get data
+        rgdSamples1 = (c_double * self.nSamples)()
+        rgdSamples2 = (c_double * self.nSamples)()
+        dwf.FDwfAnalogInStatusData(self.hdwf, 0, rgdSamples1, self.nSamples)
+        dwf.FDwfAnalogInStatusData(self.hdwf, 1, rgdSamples2, self.nSamples)
+        
+        # Process data
+        def process_data(samples):
+            for i in range(self.nSamples):
+                samples[i] = samples[i] * self.rgdWindow[i]
+            nBins = self.nSamples // 2 + 1
+            rgdBins = (c_double * nBins)()
+            rgdPhase = (c_double * nBins)()
+            dwf.FDwfSpectrumFFT(byref(samples), self.nSamples, byref(rgdBins), byref(rgdPhase), nBins)
+            fIndex = int(freq / self.sample_rate * self.nSamples)+1
+            return rgdBins[fIndex], rgdPhase[fIndex]
+        
+        c1_mag, c1_phase = process_data(rgdSamples1)
+        c2_mag, c2_phase = process_data(rgdSamples2)
+        
+        # Store results
+        if c1_mag > 0:
+            c1_mag *= 1  # 10x probe attenuation
+            h_db = 20 * math.log10(c2_mag * 20)
+            h_linear = c2_mag * 20
+            phase_diff = (c2_phase - c1_phase) * 180 / math.pi
+            phase_diff = (phase_diff + 180) % 360 - 180
+            
+            self.frequencies_plot.append(freq)
+            self.h_mag.append(h_db)
+            self.h_mag_lin.append(h_linear)
+            self.h_phase.append(phase_diff)
+            
+            # Update metrics display
+            self.current_freq_label.setText(f"Current Frequency: {freq/1e3:.1f} kHz")
+            self.current_mag_label.setText(f"Latest Magnitude: {h_db:.2f} dB")
+        
+        # Move to next frequency
+        self.current_freq_idx += 1
+        
+        # If we've completed a sweep, update the plots
+        if self.current_freq_idx >= len(self.frequencies):
+            self.update_plots()
+    
+    def update_plots(self):
+        """Update all plots with current data"""
+        if len(self.frequencies_plot) < 2:
+            return
+        
+        # Calculate primary response
+        w = 2 * numpy.pi * numpy.array(self.frequencies_plot)
+        h_mag_prim, h_phase_prim, omega = bode(self.sys, w, plot=False)
+        h_mag_prim_lin = h_mag_prim
+        h_mag_prim_db = 20 * numpy.log10(h_mag_prim)
+        h_phase_prim_deg = numpy.degrees(h_phase_prim)
+        
+        # Calculate hs/hp
+        h_mag_lin_array = numpy.array(self.h_mag_lin)
+        h_phase_array = numpy.array(self.h_phase)
+        h_prim_complex = h_mag_prim_lin * numpy.exp(1j * numpy.radians(h_phase_prim_deg))
+        h_complex = h_mag_lin_array * numpy.exp(1j * numpy.radians(h_phase_array))
+        hs_hp = h_complex / h_prim_complex
+        
+        # Update magnitude plot
+        self.measured_mag_curve.setData(self.frequencies_plot, self.h_mag)
+        self.primary_mag_curve.setData(self.frequencies_plot, h_mag_prim_db)
+        
+        # Update phase plot
+        self.measured_phase_curve.setData(self.frequencies_plot, self.h_phase)
+        self.primary_phase_curve.setData(self.frequencies_plot, h_phase_prim_deg)
+        
+        # Update hs/hp plot
+        self.hs_hp_real_curve.setData(self.frequencies_plot, numpy.real(hs_hp))
+        self.hs_hp_imag_curve.setData(self.frequencies_plot, numpy.imag(hs_hp))
+    
+    def closeEvent(self, event):
+        """Clean up hardware when closing the application"""
+        if self.hdwf is not None:
+            dwf.FDwfAnalogOutConfigure(self.hdwf, c_int(0), c_int(0))
+            dwf.FDwfDeviceCloseAll()
+        event.accept()
 
 def main():
-    st.title("Live Transfer Function Analysis")
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle('Fusion')  # Modern look
     
-    # Add parameter controls in a sidebar
-    with st.sidebar:
-        st.header("Frequency Sweep Parameters")
-        start_freq = st.number_input(
-            "Start Frequency (Hz)", 
-            min_value=1000.0, 
-            max_value=10000.0, 
-            value=1000.0, 
-            step=1.0
-        )
-        stop_freq = st.number_input(
-            "Stop Frequency (Hz)", 
-            min_value=100.0, 
-            max_value=1000000.0, 
-            value=100000.0, 
-            step=100.0
-        )
-        steps = st.number_input(
-            "Number of Steps", 
-            min_value=4, 
-            max_value=1000, 
-            value=16, 
-            step=1
-        )
+    # Set dark theme
+    dark_palette = QtGui.QPalette()
+    dark_palette.setColor(QtGui.QPalette.Window, QtGui.QColor(53, 53, 53))
+    dark_palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
+    dark_palette.setColor(QtGui.QPalette.Base, QtGui.QColor(25, 25, 25))
+    dark_palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(53, 53, 53))
+    dark_palette.setColor(QtGui.QPalette.ToolTipBase, QtCore.Qt.white)
+    dark_palette.setColor(QtGui.QPalette.ToolTipText, QtCore.Qt.white)
+    dark_palette.setColor(QtGui.QPalette.Text, QtCore.Qt.white)
+    dark_palette.setColor(QtGui.QPalette.Button, QtGui.QColor(53, 53, 53))
+    dark_palette.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
+    dark_palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
+    dark_palette.setColor(QtGui.QPalette.Link, QtGui.QColor(42, 130, 218))
+    dark_palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(42, 130, 218))
+    dark_palette.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
+    app.setPalette(dark_palette)
     
-    # Create placeholders for the plots and metrics
-    plot_placeholder = st.empty()
-    metrics_placeholder = st.empty()
+    # Set pyqtgraph configuration
+    pg.setConfigOption('background', 'k')
+    pg.setConfigOption('foreground', 'w')
     
-    # Initialize hardware with status message
-    with st.spinner('Connecting to hardware...'):
-        result = initialize_hardware(max_retries=5, retry_delay=1)
-    
-    if result is None:
-        st.error("Failed to connect to the device after multiple attempts. Please check your hardware connection and try again.")
-        return
-    
-    hdwf, nSamples = result
-    st.success("Successfully connected to hardware!")
-
-    # Setup frequency sweep parameters using the input values
-    frequencies = numpy.logspace(numpy.log10(start_freq), numpy.log10(stop_freq), num=int(steps))
-
-    # Setup FFT window
-    rgdWindow = (c_double * nSamples)()
-    vBeta = c_double(1.0)
-    vNEBW = c_double()
-    dwf.FDwfSpectrumWindow(byref(rgdWindow), c_int(nSamples), DwfWindowFlatTop, vBeta, byref(vNEBW))
-
-    # Load primary response
-    path = "../matlab/primary_curve_fit_python.mat"
-    mat = scipy.io.loadmat(path)
-    num = mat['num'].tolist()[0]
-    den = mat['den'].tolist()[0]
-    sys = control.TransferFunction(num, den)
-    
-    # Add in RX coil response
-    L = 7e-3
-    C = 2.02e-10
-    R_Coil = 31
-    R_Load  = 1e6
-    R = (R_Coil * R_Load) / (R_Coil + R_Load)
-    omega_0 = 1 / numpy.sqrt(L * C)
-    Q = (1/R) * numpy.sqrt(L / C)
-    H_rx = control.TransferFunction([omega_0**2], [1, omega_0/Q, omega_0**2])
-    sys = sys * H_rx
-
-    # Setup plotting
-    fig, (ax1, ax2, ax3) = setup_plotting()
-    lines = {}
-
-    try:
-        while True:
-            h_mag = []
-            h_mag_lin = []
-            h_phase = []
-
-            for freq in frequencies:
-                    
-                print(f"\rFrequency: {freq/1e3:.1f} kHz", end='')
-                
-                # Set frequency and acquire data
-                dwf.FDwfAnalogOutNodeFrequencySet(hdwf, c_int(0), AnalogOutNodeCarrier, c_double(freq))
-                dwf.FDwfAnalogOutConfigure(hdwf, c_int(0), c_int(1))
-                dwf.FDwfAnalogInConfigure(hdwf, c_int(1), c_int(1))
-                
-                # Wait for acquisition
-                while True:
-                    sts = c_byte()
-                    dwf.FDwfAnalogInStatus(hdwf, c_int(1), byref(sts))
-                    if sts.value == DwfStateDone.value:
-                        break
-                    time.sleep(0.001)
-                
-                # Get data
-                rgdSamples1 = (c_double * nSamples)()
-                rgdSamples2 = (c_double * nSamples)()
-                dwf.FDwfAnalogInStatusData(hdwf, 0, rgdSamples1, nSamples)
-                dwf.FDwfAnalogInStatusData(hdwf, 1, rgdSamples2, nSamples)
-                
-                # Process data (same as original)
-                def process_data(samples):
-                    for i in range(nSamples):
-                        samples[i] = samples[i] * rgdWindow[i]
-                    nBins = nSamples // 2 + 1
-                    rgdBins = (c_double * nBins)()
-                    rgdPhase = (c_double * nBins)()
-                    dwf.FDwfSpectrumFFT(byref(samples), nSamples, byref(rgdBins), byref(rgdPhase), nBins)
-                    fIndex = int(freq / 20000000 * nSamples) + 1
-                    return rgdBins[fIndex], rgdPhase[fIndex]
-                
-                c1_mag, c1_phase = process_data(rgdSamples1)
-                c2_mag, c2_phase = process_data(rgdSamples2)
-                
-                if c1_mag > 0:
-                    c1_mag *= 1  # 10x probe attenuation
-                    h_db = 20 * math.log10(c2_mag * 20)
-                    h_linear = c2_mag * 20
-                    phase_diff = (c2_phase - c1_phase) * 180 / math.pi
-                    phase_diff = (phase_diff + 180) % 360 - 180
-                    
-                    h_mag.append(h_db)
-                    h_mag_lin.append(h_linear)
-                    h_phase.append(phase_diff)
-                else:
-                    h_mag.append(float('nan'))
-                    h_mag_lin.append(float('nan'))
-                    h_phase.append(float('nan'))
-
-            # Remove first point and calculate primary response
-            frequencies_plot = frequencies[1:]
-            h_mag = h_mag[1:]
-            h_mag_lin = h_mag_lin[1:]
-            h_phase = h_phase[1:]
-
-            w = 2 * numpy.pi * frequencies_plot
-            h_mag_prim, h_phase_prim, omega = bode(sys, w, plot=False)
-            h_mag_prim_lin = h_mag_prim
-            h_mag_prim = 20 * numpy.log10(h_mag_prim)
-            h_phase_prim = numpy.degrees(h_phase_prim)
-
-            # Calculate hs/hp
-            h_mag_lin = numpy.array(h_mag_lin)
-            h_phase = numpy.array(h_phase)
-            h_prim_complex = h_mag_prim_lin * numpy.exp(1j * numpy.radians(h_phase_prim))
-            h_complex = h_mag_lin * numpy.exp(1j * numpy.radians(h_phase))
-            hs_hp = h_complex / h_prim_complex
-
-            # Update plots using streamlit
-            fig, (ax1, ax2, ax3) = setup_plotting()
-            
-            ax1.semilogx(frequencies_plot, h_mag, 'b-', label='Measured')
-            ax1.semilogx(frequencies_plot, h_mag_prim, 'r--', label='Primary')
-            ax1.set_ylabel('Magnitude (dB)')
-            ax1.legend()
-
-            ax2.semilogx(frequencies_plot, h_phase, 'b-', label='Measured')
-            ax2.semilogx(frequencies_plot, h_phase_prim, 'r--', label='Primary')
-            ax2.set_ylabel('Phase (degrees)')
-            ax2.legend()
-
-            ax3.semilogx(frequencies_plot, numpy.real(hs_hp), 'b-', label='Real')
-            ax3.semilogx(frequencies_plot, numpy.imag(hs_hp), 'r--', label='Imaginary')
-            ax3.set_ylabel('hs/hp')
-            ax3.set_xlabel('Frequency (Hz)')
-            ax3.legend()
-
-            plt.tight_layout()
-            
-            # Update the streamlit elements
-            plot_placeholder.pyplot(fig)
-            
-            # Display current metrics
-            with metrics_placeholder.container():
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Current Frequency", f"{frequencies[-1]/1e3:.1f} kHz")
-                with col2:
-                    st.metric("Latest Magnitude", f"{h_mag[-1]:.2f} dB")
-            
-            plt.close(fig)  # Clean up matplotlib figure
-            
-            time.sleep(0.01)  # Small delay to prevent overwhelming the browser
-
-    except KeyboardInterrupt:
-        print("\nExiting...")
-    finally:
-        # Turn off the signal generator before closing
-        dwf.FDwfAnalogOutConfigure(hdwf, c_int(0), c_int(0))
-        dwf.FDwfDeviceCloseAll()
-        plt.ioff()
-        plt.close('all')
+    analyzer = SignalAnalyzerApp()
+    analyzer.show()
+    sys.exit(app.exec_())
 
 if __name__ == "__main__":
-    main() 
+    main()

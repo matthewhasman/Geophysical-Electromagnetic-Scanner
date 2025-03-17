@@ -8,10 +8,15 @@ This project uses `uv` for dependency management. If you haven't installed `uv` 
 
 ```source .venv/bin/activate # On Windows use: .venv\Scripts\activate```
 
+To install project dependencies then use the command:
+
+```uv sync```
+
 ### Running the Dashboard
 
 To run the dashboard:
 
 1. Ensure your virtual environment is activated
-2. Run the dashboard:
-```streamlit run Live_Transfer_Funtion_Analysis.py```
+2. Run the dashboard using command 
+```uv run -- streamlit run Live_Transfer_Function_Analysis.py```
+

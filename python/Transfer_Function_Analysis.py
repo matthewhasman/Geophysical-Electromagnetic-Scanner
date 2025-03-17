@@ -40,11 +40,11 @@ dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf, c_int(0), AnalogOutNodeCarrier, c_double
 dwf.FDwfAnalogOutConfigure(hdwf, c_int(0), c_int(1))  # Initial configuration
 
 # Configure AnalogIn for channels 0 and 1
-nSamples = 2**17  # Power of two for FFT efficiency
+nSamples = 2**10  # Power of two for FFT efficiency
 dwf.FDwfAnalogInFrequencySet(hdwf, c_double(20000000.0))  # 20 MHz sample rate
 dwf.FDwfAnalogInBufferSizeSet(hdwf, nSamples)
 dwf.FDwfAnalogInChannelEnableSet(hdwf, 0, c_int(1))  # Enable channel 0 (C1)
-dwf.FDwfAnalogInChannelRangeSet(hdwf, 0, c_double(2))  # 2V range
+dwf.FDwfAnalogInChannelRangeSet(hdwf, 0, c_double(20))  # 20V range
 dwf.FDwfAnalogInChannelEnableSet(hdwf, 1, c_int(1))  # Enable channel 1 (C2)
 dwf.FDwfAnalogInChannelRangeSet(hdwf, 1, c_double(2))  # 2V range
 
@@ -136,8 +136,9 @@ h_phase = h_phase[1:]
 ## This is the transfer function of the primary response
 path = "../matlab/primary_curve_fit_python.mat"
 mat = scipy.io.loadmat(path)
-num = mat['num'].tolist()[0]
-den = mat['den'].tolist()[0]
+num = mat['num'].tolist()[0][0][0]
+den = mat['den'].tolist()[0][0][0]
+
 sys = control.TransferFunction(num, den)
 ## Get primary response for frequencies
 w = 2 * numpy.pi * frequencies
