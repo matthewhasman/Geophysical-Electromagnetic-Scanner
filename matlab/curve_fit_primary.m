@@ -1,4 +1,4 @@
-[primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("Primary_Battery.csv", 20);
+[primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("Primary_Battery2.csv", 20);
 % TX coil parameters (Initial Guess)
 res_Tx = 4; % Ohms
 L_Tx = 0.001; % Henries
@@ -12,22 +12,9 @@ N_Rx = 200;         % Number of turns
 coil_distance = 0.84; % Intercoil distance (m)
 a_Rx = r_Rx^2 * pi;
 
-tx_tf = tf(1, [L_Tx res_Tx]) * 1;
+tx_tf = tf(1, [L_Tx res_Tx]);
 
-% Add in terms to describe Rx coil
-L = 7e-3;       % Inductance: 7 mH
-%C = 2.02e-10;
-R_coil = 31;    % Coil resistance: 31 ohms
-R_load = 1e6;   % Load resistance: 1 MOhm
-R = (R_coil * R_load) / (R_coil + R_load);
-%R = R_coil + R_load;
-%omega_0 = 1 / sqrt(L * C);
-omega_0 = 187834 * 2 * pi;
-C = L/omega_0^2;
-Q = (1/R) * sqrt(L / C);
-H = tf(omega_0^2, [1, omega_0/Q, omega_0^2]);
-
-rx_primary_tf = tf([ -N_Tx*N_Rx*a_Tx*a_Rx,0],coil_distance^3) * tx_tf * 1e-7 * H;
+rx_primary_tf = tf([ -N_Tx*N_Rx*a_Tx*a_Rx,0],coil_distance^3) * tx_tf * 1e-7;
 
 % Convert primary measurement to linear units 
 primary_linear = 10.^(primary_magnitude ./ 20);
@@ -56,7 +43,7 @@ w = 2 * pi * plot_frequency;
 
 % Compute frequency responses
 [mag1, phase1] = bode(rx_primary_tf, w);
-[mag2, phase2] = bode(primary_estimate_tf * H, w);
+[mag2, phase2] = bode(primary_estimate_tf, w);
 
 % Squeeze 3D arrays to vectors
 mag1 = squeeze(mag1);
@@ -74,11 +61,14 @@ mag3 = squeeze(mag3);
 phase3 = squeeze(phase3);
 mag3_db = 20*log10(mag3);
 
+% Curve Fit More complex model to difference
+isolated_rx = log10((plot_magnitude - mag3_db)/20.0) .* exp(2i.*pi.*phase3./180.0);
+
 % Create figure
 figure;
 
 % Magnitude plot
-subplot(3,1,1);
+subplot(4,1,1);
 semilogx(plot_frequency, mag1_db, 'b', 'LineWidth', 1.5);
 hold on;
 semilogx(plot_frequency, mag2_db, 'k--', 'LineWidth', 1.5);
@@ -91,7 +81,7 @@ grid on;
 xlim([min(plot_frequency), max(plot_frequency)]);
 
 % Phase plot
-subplot(3,1,2);
+subplot(4,1,2);
 semilogx(plot_frequency, phase1, 'b', 'LineWidth', 1.5);
 hold on;
 semilogx(plot_frequency, phase2, 'k--', 'LineWidth', 1.5);
@@ -102,8 +92,12 @@ legend('Theoretical Model', 'Estimated Model', 'Recorded Values');
 grid on;
 xlim([min(plot_frequency), max(plot_frequency)]);
 
-subplot(3,1,3);
+subplot(4,1,3);
 semilogx(plot_frequency, plot_magnitude - mag3_db, 'r', 'LineWidth', 1.5);
+
+subplot(4,1,4);
+semilogx(plot_frequency, plot_phase - phase3, 'r', 'LineWidth', 1.5);
+
 
 % Adjust layout
 sgtitle('Fitting Data to Model');

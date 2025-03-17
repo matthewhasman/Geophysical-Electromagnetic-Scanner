@@ -1,374 +1,335 @@
-from ctypes import *
-from dwfconstants import *
 import math
 import time
-import numpy
+import numpy as np
 import scipy
 import control
 from control.matlab import ss, bode
 import sys
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
-import numpy as np
+from WaveformInterface import AnalogDiscovery
 
-if sys.platform.startswith("win"):
-    dwf = cdll.dwf
-elif sys.platform.startswith("darwin"):
-    dwf = cdll.LoadLibrary("/Library/Frameworks/dwf.framework/dwf")
-else:
-    dwf = cdll.LoadLibrary("libdwf.so")
-
-class SignalAnalyzerApp(QtWidgets.QMainWindow):
+class TransferFunctionAnalyzer(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Live Transfer Function Analysis")
-        self.setGeometry(100, 100, 1200, 800)
         
-        # Parameters
-        self.start_freq = 1000.0
-        self.stop_freq = 100000.0
-        self.steps = 16
-        self.frequencies = numpy.logspace(numpy.log10(self.start_freq), numpy.log10(self.stop_freq), num=int(self.steps))
+        # Initialize the Analog Discovery device
+        self.device = AnalogDiscovery()
+        self.device.init()
         
-        self.sample_rate = 1000000.0
-
-        # System Transfer Functions
-        self.setup_transfer_functions()
+        # Configure the device
+        self.setupDevice()
         
-        # UI Setup
-        self.setup_ui()
+        # Set up the UI
+        self.setupUI()
         
-        # Hardware
-        self.hdwf = None
-        self.nSamples = None
-        self.rgdWindow = None
-        self.vNEBW = c_double()
-        
-        # Data
-        self.current_freq_idx = 0
+        # Initialize data structures
+        self.frequencies = []
         self.h_mag = []
-        self.h_mag_lin = []
         self.h_phase = []
-        self.frequencies_plot = []
+        self.h_mag_prim = []
+        self.h_phase_prim = []
+        self.hs_hp_real = []
+        self.hs_hp_imag = []
         
-        # Start
-        self.initialize_hardware()
+        # Start the measurement timer
         self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_measurement)
-        self.timer.start(10)  # Update every 10ms (100 Hz)
-    
-    def setup_ui(self):
-        # Main widget
+        self.timer.timeout.connect(self.updateMeasurement)
+        self.timer.start(100)  # Update every 100ms
+        
+    def setupDevice(self):
+        # Initialize the scope with appropriate settings
+        self.device.init_scope(sampling_frequency=20e6, buffer_size=2**10, amplitude_range=5)
+        
+        # Enable both channels
+        self.device.dwf.FDwfAnalogInChannelEnableSet(self.device.handle, 0, 1)  # Enable channel 0 (C1)
+        self.device.dwf.FDwfAnalogInChannelRangeSet(self.device.handle, 0, 20)  # 20V range
+        self.device.dwf.FDwfAnalogInChannelEnableSet(self.device.handle, 1, 1)  # Enable channel 1 (C2)
+        self.device.dwf.FDwfAnalogInChannelRangeSet(self.device.handle, 1, 2)   # 2V range
+        
+    def setupUI(self):
+        # Set up the main window
+        self.setWindowTitle("Transfer Function Analyzer")
+        self.setGeometry(100, 100, 1000, 800)
+        
+        # Create central widget and layout
         central_widget = QtWidgets.QWidget()
         self.setCentralWidget(central_widget)
+        layout = QtWidgets.QVBoxLayout(central_widget)
         
-        # Main layout
-        main_layout = QtWidgets.QVBoxLayout(central_widget)
-        
-        # Control panel
+        # Create control panel
         control_panel = QtWidgets.QHBoxLayout()
         
-        # Start frequency
-        start_freq_layout = QtWidgets.QVBoxLayout()
-        start_freq_label = QtWidgets.QLabel("Start Frequency (Hz):")
-        self.start_freq_input = QtWidgets.QDoubleSpinBox()
-        self.start_freq_input.setRange(100, 10000)
-        self.start_freq_input.setValue(self.start_freq)
-        self.start_freq_input.valueChanged.connect(self.update_parameters)
-        start_freq_layout.addWidget(start_freq_label)
-        start_freq_layout.addWidget(self.start_freq_input)
+        # Frequency range controls
+        freq_group = QtWidgets.QGroupBox("Frequency Range")
+        freq_layout = QtWidgets.QFormLayout(freq_group)
         
-        # Stop frequency
-        stop_freq_layout = QtWidgets.QVBoxLayout()
-        stop_freq_label = QtWidgets.QLabel("Stop Frequency (Hz):")
-        self.stop_freq_input = QtWidgets.QDoubleSpinBox()
-        self.stop_freq_input.setRange(1000, 1000000)
-        self.stop_freq_input.setValue(self.stop_freq)
-        self.stop_freq_input.valueChanged.connect(self.update_parameters)
-        stop_freq_layout.addWidget(stop_freq_label)
-        stop_freq_layout.addWidget(self.stop_freq_input)
+        self.start_freq_input = QtWidgets.QLineEdit("150")
+        self.stop_freq_input = QtWidgets.QLineEdit("100000")
+        self.steps_input = QtWidgets.QLineEdit("101")
         
-        # Steps
-        steps_layout = QtWidgets.QVBoxLayout()
-        steps_label = QtWidgets.QLabel("Number of Steps:")
-        self.steps_input = QtWidgets.QSpinBox()
-        self.steps_input.setRange(4, 1000)
-        self.steps_input.setValue(self.steps)
-        self.steps_input.valueChanged.connect(self.update_parameters)
-        steps_layout.addWidget(steps_label)
-        steps_layout.addWidget(self.steps_input)
+        freq_layout.addRow("Start (Hz):", self.start_freq_input)
+        freq_layout.addRow("Stop (Hz):", self.stop_freq_input)
+        freq_layout.addRow("Steps:", self.steps_input)
         
-        # Current frequency and magnitude display
-        metrics_layout = QtWidgets.QVBoxLayout()
-        self.current_freq_label = QtWidgets.QLabel("Current Frequency: 0 kHz")
-        self.current_mag_label = QtWidgets.QLabel("Latest Magnitude: 0 dB")
-        metrics_layout.addWidget(self.current_freq_label)
-        metrics_layout.addWidget(self.current_mag_label)
+        # Amplitude control
+        self.amplitude_input = QtWidgets.QLineEdit("0.5")
+        freq_layout.addRow("Amplitude (V):", self.amplitude_input)
         
-        # Add all controls to panel
-        control_panel.addLayout(start_freq_layout)
-        control_panel.addLayout(stop_freq_layout)
-        control_panel.addLayout(steps_layout)
-        control_panel.addLayout(metrics_layout)
-        control_panel.addStretch(1)
+        # Add buttons
+        button_layout = QtWidgets.QHBoxLayout()
+        self.start_button = QtWidgets.QPushButton("Start")
+        self.stop_button = QtWidgets.QPushButton("Stop")
+        self.save_button = QtWidgets.QPushButton("Save Data")
         
-        # Add control panel to main layout
-        main_layout.addLayout(control_panel)
+        self.start_button.clicked.connect(self.startMeasurement)
+        self.stop_button.clicked.connect(self.stopMeasurement)
+        self.save_button.clicked.connect(self.saveData)
         
-        # Create plots
-        plots_layout = QtWidgets.QVBoxLayout()
+        button_layout.addWidget(self.start_button)
+        button_layout.addWidget(self.stop_button)
+        button_layout.addWidget(self.save_button)
         
-        # Magnitude plot
-        self.magnitude_plot = pg.PlotWidget(title="Transfer Function - Magnitude")
-        self.magnitude_plot.setLabel('left', 'Magnitude', units='dB')
-        self.magnitude_plot.setLabel('bottom', 'Frequency', units='Hz')
-        self.magnitude_plot.setLogMode(x=True, y=False)
-        self.magnitude_plot.showGrid(x=True, y=True)
-        self.measured_mag_curve = self.magnitude_plot.plot(pen='b', name='Measured')
-        self.primary_mag_curve = self.magnitude_plot.plot(pen='r', name='Primary')
-        self.magnitude_plot.addLegend()
+        freq_layout.addRow(button_layout)
+        control_panel.addWidget(freq_group)
         
-        # Phase plot
-        self.phase_plot = pg.PlotWidget(title="Transfer Function - Phase")
-        self.phase_plot.setLabel('left', 'Phase', units='degrees')
-        self.phase_plot.setLabel('bottom', 'Frequency', units='Hz')
-        self.phase_plot.setLogMode(x=True, y=False)
-        self.phase_plot.showGrid(x=True, y=True)
-        self.measured_phase_curve = self.phase_plot.plot(pen='b', name='Measured')
-        self.primary_phase_curve = self.phase_plot.plot(pen='r', name='Primary')
-        self.phase_plot.addLegend()
+        # Add primary response controls
+        prim_group = QtWidgets.QGroupBox("Primary Response")
+        prim_layout = QtWidgets.QFormLayout(prim_group)
         
-        # hs/hp plot
-        self.hs_hp_plot = pg.PlotWidget(title="hs/hp")
-        self.hs_hp_plot.setLabel('left', 'hs/hp')
-        self.hs_hp_plot.setLabel('bottom', 'Frequency', units='Hz')
-        self.hs_hp_plot.setLogMode(x=True, y=False)
-        self.hs_hp_plot.showGrid(x=True, y=True)
-        self.hs_hp_real_curve = self.hs_hp_plot.plot(pen='b', name='Real')
-        self.hs_hp_imag_curve = self.hs_hp_plot.plot(pen='r', name='Imaginary')
-        self.hs_hp_plot.addLegend()
+        self.prim_path_input = QtWidgets.QLineEdit("../matlab/primary_curve_fit_python.mat")
+        self.load_prim_button = QtWidgets.QPushButton("Load Primary")
+        self.load_prim_button.clicked.connect(self.loadPrimaryResponse)
+        
+        prim_layout.addRow("Path:", self.prim_path_input)
+        prim_layout.addWidget(self.load_prim_button)
+        
+        control_panel.addWidget(prim_group)
+        layout.addLayout(control_panel)
+        
+        # Create plot widgets
+        self.plot_widget1 = pg.PlotWidget()
+        self.plot_widget1.setTitle("Magnitude Response")
+        self.plot_widget1.setLabel('left', "Magnitude (dB)")
+        self.plot_widget1.setLabel('bottom', "Frequency (Hz)")
+        self.plot_widget1.setLogMode(x=True, y=False)
+        
+        self.plot_widget2 = pg.PlotWidget()
+        self.plot_widget2.setTitle("Phase Response")
+        self.plot_widget2.setLabel('left', "Phase (degrees)")
+        self.plot_widget2.setLabel('bottom', "Frequency (Hz)")
+        self.plot_widget2.setLogMode(x=True, y=False)
+        
+        self.plot_widget3 = pg.PlotWidget()
+        self.plot_widget3.setTitle("hs/hp")
+        self.plot_widget3.setLabel('left', "Value")
+        self.plot_widget3.setLabel('bottom', "Frequency (Hz)")
+        self.plot_widget3.setLogMode(x=True, y=False)
         
         # Add plots to layout
-        plots_layout.addWidget(self.magnitude_plot)
-        plots_layout.addWidget(self.phase_plot)
-        plots_layout.addWidget(self.hs_hp_plot)
+        layout.addWidget(self.plot_widget1)
+        layout.addWidget(self.plot_widget2)
+        layout.addWidget(self.plot_widget3)
         
-        # Add plots to main layout
-        main_layout.addLayout(plots_layout)
-    
-    def setup_transfer_functions(self):
-        # Load primary response
+        # Create plot data items
+        self.mag_plot = self.plot_widget1.plot(pen='r', name="Measured")
+        self.mag_prim_plot = self.plot_widget1.plot(pen=pg.mkPen('b', style=QtCore.Qt.DashLine), name="Primary")
+        
+        self.phase_plot = self.plot_widget2.plot(pen='r', name="Measured")
+        self.phase_prim_plot = self.plot_widget2.plot(pen=pg.mkPen('b', style=QtCore.Qt.DashLine), name="Primary")
+        
+        self.hs_hp_real_plot = self.plot_widget3.plot(pen='g', name="Real")
+        self.hs_hp_imag_plot = self.plot_widget3.plot(pen='m', name="Imaginary")
+        
+        # Add legends
+        self.plot_widget1.addLegend()
+        self.plot_widget2.addLegend()
+        self.plot_widget3.addLegend()
+        
+    def startMeasurement(self):
+        # Get parameters from UI
+        start_freq = float(self.start_freq_input.text())
+        stop_freq = float(self.stop_freq_input.text())
+        steps = int(self.steps_input.text())
+        amplitude = float(self.amplitude_input.text())
+        
+        # Start the measurement
+        self.is_measuring = True
+        self.frequencies = np.logspace(np.log10(start_freq), np.log10(stop_freq), num=steps)
+        self.current_index = 0
+        self.h_mag = []
+        self.h_phase = []
+        self.h_mag_lin = []
+        
+        # Update the UI
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        
+    def stopMeasurement(self):
+        self.is_measuring = False
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        
+    def updateMeasurement(self):
+        if not hasattr(self, 'is_measuring') or not self.is_measuring:
+            return
+            
+        if self.current_index >= len(self.frequencies):
+            self.is_measuring = False
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            self.calculateHsHp()
+            return
+            
+        # Get current frequency
+        freq = self.frequencies[self.current_index]
+        
+        # Set generator frequency
+        amplitude = float(self.amplitude_input.text())
+        self.device.generate(channel=1, function=self.device.constants.funcSine, 
+                            offset=0, frequency=freq, amplitude=amplitude)
+        
+        # Wait for signal to stabilize
+        time.sleep(0.05)
+        
+        # Measure the response
         try:
-            path = "../matlab/primary_curve_fit_python.mat"
+            # Use the frequency_response method for a single frequency point
+            _, mag, phase = self.device.frequency_response(
+                input_channel=1, output_channel=2,
+                start_freq=freq, stop_freq=freq, steps=1,
+                amplitude=amplitude, probe_attenuation=10.0
+            )
+            
+            # Store the results
+            self.h_mag.append(mag[0])
+            self.h_phase.append(phase[0])
+            self.h_mag_lin.append(10**(mag[0]/20))  # Convert dB to linear
+            
+            # Update the plots
+            self.updatePlots()
+            
+            # Move to next frequency
+            self.current_index += 1
+            
+        except Exception as e:
+            print(f"Error during measurement: {e}")
+            self.is_measuring = False
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+    
+    def loadPrimaryResponse(self):
+        try:
+            path = self.prim_path_input.text()
             mat = scipy.io.loadmat(path)
             num = mat['num'].tolist()[0][0][0]
             den = mat['den'].tolist()[0][0][0]
-            self.sys = control.TransferFunction(num, den)
             
-            print("Transfer functions loaded successfully")
+            sys = control.TransferFunction(num, den)
+            
+            # Calculate primary response for current frequencies
+            if len(self.frequencies) > 0:
+                w = 2 * np.pi * self.frequencies[:self.current_index]
+                self.h_mag_prim, self.h_phase_prim, _ = bode(sys, w, plot=False)
+                
+                # Convert to dB
+                self.h_mag_prim_lin = self.h_mag_prim
+                self.h_mag_prim = 20 * np.log10(self.h_mag_prim)
+                self.h_phase_prim = np.degrees(self.h_phase_prim)
+                
+                # Update plots
+                self.updatePlots()
+                
+                # Calculate hs/hp if we have both measurements
+                if len(self.h_mag) > 0:
+                    self.calculateHsHp()
+                    
         except Exception as e:
-            print(f"Error loading transfer functions: {e}")
-            self.sys = control.TransferFunction([1], [1])
+            print(f"Error loading primary response: {e}")
     
-    def initialize_hardware(self, max_retries=5, retry_delay=1):
-        """Try to initialize hardware with retries"""
-        for attempt in range(max_retries):
-            version = create_string_buffer(16)
-            dwf.FDwfGetVersion(version)
-            print(f"Attempt {attempt + 1}/{max_retries}: DWF Version: {str(version.value)}")
-
-            self.hdwf = c_int()
-            szerr = create_string_buffer(512)
-            print("Opening first device")
-            if dwf.FDwfDeviceOpen(-1, byref(self.hdwf)) == 1 and self.hdwf.value != hdwfNone.value:
-                print("Successfully connected to device")
-                
-                # Device configuration
-                dwf.FDwfParamSet(DwfParamOnClose, c_int(0))
-                dwf.FDwfDeviceAutoConfigureSet(self.hdwf, c_int(0))
-
-                # Configure AWG
-                dwf.FDwfAnalogOutNodeEnableSet(self.hdwf, c_int(0), AnalogOutNodeCarrier, c_int(1))
-                dwf.FDwfAnalogOutNodeFunctionSet(self.hdwf, c_int(0), AnalogOutNodeCarrier, funcSine)
-                dwf.FDwfAnalogOutNodeAmplitudeSet(self.hdwf, c_int(0), AnalogOutNodeCarrier, c_double(0.5))
-                dwf.FDwfAnalogOutConfigure(self.hdwf, c_int(0), c_int(1))
-
-                # Configure Scope
-                self.nSamples = 2**16
-                dwf.FDwfAnalogInFrequencySet(self.hdwf, c_double(self.sample_rate))
-                dwf.FDwfAnalogInBufferSizeSet(self.hdwf, self.nSamples)
-                dwf.FDwfAnalogInChannelEnableSet(self.hdwf, 0, c_int(1))
-                dwf.FDwfAnalogInChannelRangeSet(self.hdwf, 0, c_double(2))
-                dwf.FDwfAnalogInChannelEnableSet(self.hdwf, 1, c_int(1))
-                dwf.FDwfAnalogInChannelRangeSet(self.hdwf, 1, c_double(2))
-                
-                # Setup FFT window
-                self.rgdWindow = (c_double * self.nSamples)()
-                vBeta = c_double(1.0)
-                dwf.FDwfSpectrumWindow(byref(self.rgdWindow), c_int(self.nSamples), DwfWindowFlatTop, vBeta, byref(self.vNEBW))
-                
-                return True
-            
-            dwf.FDwfGetLastErrorMsg(szerr)
-            print(f"Attempt {attempt + 1} failed: {szerr.value}")
-            
-            if attempt < max_retries - 1:  # Don't sleep on the last attempt
-                print(f"Retrying in {retry_delay} seconds...")
-                time.sleep(retry_delay)
-        
-        return False
-    
-    def update_parameters(self):
-        """Update sweep parameters from UI inputs"""
-        self.start_freq = self.start_freq_input.value()
-        self.stop_freq = self.stop_freq_input.value()
-        self.steps = self.steps_input.value()
-        self.frequencies = numpy.logspace(numpy.log10(self.start_freq), numpy.log10(self.stop_freq), num=int(self.steps))
-        
-        # Reset measurements
-        self.current_freq_idx = 0
-        self.h_mag = []
-        self.h_mag_lin = []
-        self.h_phase = []
-        self.frequencies_plot = []
-    
-    def update_measurement(self):
-        """Perform a single frequency measurement and update the display"""
-        if self.hdwf is None or self.current_freq_idx >= len(self.frequencies):
-            self.current_freq_idx = 0
-            self.h_mag = []
-            self.h_mag_lin = []
-            self.h_phase = []
-            self.frequencies_plot = []
-        
-        # Get current frequency
-        freq = self.frequencies[self.current_freq_idx]
-        print(f"\rFrequency: {freq/1e3:.1f} kHz", end='')
-        
-        # Set frequency and acquire data
-        dwf.FDwfAnalogOutNodeFrequencySet(self.hdwf, c_int(0), AnalogOutNodeCarrier, c_double(freq))
-        dwf.FDwfAnalogOutConfigure(self.hdwf, c_int(0), c_int(1))
-        dwf.FDwfAnalogInConfigure(self.hdwf, c_int(1), c_int(1))
-        
-        # Wait for acquisition
-        while True:
-            sts = c_byte()
-            dwf.FDwfAnalogInStatus(self.hdwf, c_int(1), byref(sts))
-            if sts.value == DwfStateDone.value:
-                break
-            time.sleep(0.001)
-            QtWidgets.QApplication.processEvents()  # Keep UI responsive
-        
-        # Get data
-        rgdSamples1 = (c_double * self.nSamples)()
-        rgdSamples2 = (c_double * self.nSamples)()
-        dwf.FDwfAnalogInStatusData(self.hdwf, 0, rgdSamples1, self.nSamples)
-        dwf.FDwfAnalogInStatusData(self.hdwf, 1, rgdSamples2, self.nSamples)
-        
-        # Process data
-        def process_data(samples):
-            for i in range(self.nSamples):
-                samples[i] = samples[i] * self.rgdWindow[i]
-            nBins = self.nSamples // 2 + 1
-            rgdBins = (c_double * nBins)()
-            rgdPhase = (c_double * nBins)()
-            dwf.FDwfSpectrumFFT(byref(samples), self.nSamples, byref(rgdBins), byref(rgdPhase), nBins)
-            fIndex = int(freq / self.sample_rate * self.nSamples)+1
-            return rgdBins[fIndex], rgdPhase[fIndex]
-        
-        c1_mag, c1_phase = process_data(rgdSamples1)
-        c2_mag, c2_phase = process_data(rgdSamples2)
-        
-        # Store results
-        if c1_mag > 0:
-            c1_mag *= 1  # 10x probe attenuation
-            h_db = 20 * math.log10(c2_mag * 20)
-            h_linear = c2_mag * 20
-            phase_diff = (c2_phase - c1_phase) * 180 / math.pi
-            phase_diff = (phase_diff + 180) % 360 - 180
-            
-            self.frequencies_plot.append(freq)
-            self.h_mag.append(h_db)
-            self.h_mag_lin.append(h_linear)
-            self.h_phase.append(phase_diff)
-            
-            # Update metrics display
-            self.current_freq_label.setText(f"Current Frequency: {freq/1e3:.1f} kHz")
-            self.current_mag_label.setText(f"Latest Magnitude: {h_db:.2f} dB")
-        
-        # Move to next frequency
-        self.current_freq_idx += 1
-        
-        # If we've completed a sweep, update the plots
-        if self.current_freq_idx >= len(self.frequencies):
-            self.update_plots()
-    
-    def update_plots(self):
-        """Update all plots with current data"""
-        if len(self.frequencies_plot) < 2:
+    def calculateHsHp(self):
+        if len(self.h_mag_prim) == 0 or len(self.h_mag) == 0:
             return
+            
+        # Make sure arrays are the same length
+        min_len = min(len(self.h_mag), len(self.h_mag_prim))
         
-        # Calculate primary response
-        w = 2 * numpy.pi * numpy.array(self.frequencies_plot)
-        h_mag_prim, h_phase_prim, omega = bode(self.sys, w, plot=False)
-        h_mag_prim_lin = h_mag_prim
-        h_mag_prim_db = 20 * numpy.log10(h_mag_prim)
-        h_phase_prim_deg = numpy.degrees(h_phase_prim)
+        # Convert values to complex numbers
+        h_mag_lin = np.array(self.h_mag_lin[:min_len])
+        h_phase = np.array(self.h_phase[:min_len])
+        h_prim_lin = self.h_mag_prim_lin[:min_len]
+        h_prim_phase = self.h_phase_prim[:min_len]
+        
+        # Calculate complex transfer functions
+        h_complex = h_mag_lin * np.exp(1j * np.radians(h_phase))
+        h_prim_complex = h_prim_lin * np.exp(1j * np.radians(h_prim_phase))
         
         # Calculate hs/hp
-        h_mag_lin_array = numpy.array(self.h_mag_lin)
-        h_phase_array = numpy.array(self.h_phase)
-        h_prim_complex = h_mag_prim_lin * numpy.exp(1j * numpy.radians(h_phase_prim_deg))
-        h_complex = h_mag_lin_array * numpy.exp(1j * numpy.radians(h_phase_array))
         hs_hp = h_complex / h_prim_complex
         
+        # Store real and imaginary parts
+        self.hs_hp_real = np.real(hs_hp)
+        self.hs_hp_imag = np.imag(hs_hp)
+        
+        # Update plots
+        self.updatePlots()
+    
+    def updatePlots(self):
+        # Get the frequencies measured so far
+        freqs = self.frequencies[:self.current_index]
+        
         # Update magnitude plot
-        self.measured_mag_curve.setData(self.frequencies_plot, self.h_mag)
-        self.primary_mag_curve.setData(self.frequencies_plot, h_mag_prim_db)
+        self.mag_plot.setData(freqs, self.h_mag)
+        if len(self.h_mag_prim) > 0:
+            self.mag_prim_plot.setData(freqs[:len(self.h_mag_prim)], self.h_mag_prim)
         
         # Update phase plot
-        self.measured_phase_curve.setData(self.frequencies_plot, self.h_phase)
-        self.primary_phase_curve.setData(self.frequencies_plot, h_phase_prim_deg)
+        self.phase_plot.setData(freqs, self.h_phase)
+        if len(self.h_phase_prim) > 0:
+            self.phase_prim_plot.setData(freqs[:len(self.h_phase_prim)], self.h_phase_prim)
         
         # Update hs/hp plot
-        self.hs_hp_real_curve.setData(self.frequencies_plot, numpy.real(hs_hp))
-        self.hs_hp_imag_curve.setData(self.frequencies_plot, numpy.imag(hs_hp))
+        if len(self.hs_hp_real) > 0:
+            self.hs_hp_real_plot.setData(freqs[:len(self.hs_hp_real)], self.hs_hp_real)
+            self.hs_hp_imag_plot.setData(freqs[:len(self.hs_hp_imag)], self.hs_hp_imag)
+    
+    def saveData(self):
+        try:
+            filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Data", "", "CSV Files (*.csv)")
+            if filename:
+                with open(filename, 'w') as f:
+                    f.write("Frequency,Magnitude,Phase")
+                    if len(self.h_mag_prim) > 0:
+                        f.write(",PrimaryMagnitude,PrimaryPhase")
+                    if len(self.hs_hp_real) > 0:
+                        f.write(",HsHpReal,HsHpImag")
+                    f.write("\n")
+                    
+                    for i in range(self.current_index):
+                        f.write(f"{self.frequencies[i]},{self.h_mag[i]},{self.h_phase[i]}")
+                        
+                        if len(self.h_mag_prim) > 0 and i < len(self.h_mag_prim):
+                            f.write(f",{self.h_mag_prim[i]},{self.h_phase_prim[i]}")
+                        else:
+                            f.write(",,")
+                            
+                        if len(self.hs_hp_real) > 0 and i < len(self.hs_hp_real):
+                            f.write(f",{self.hs_hp_real[i]},{self.hs_hp_imag[i]}")
+                        
+                        f.write("\n")
+                    
+                print(f"Data saved to {filename}")
+        except Exception as e:
+            print(f"Error saving data: {e}")
     
     def closeEvent(self, event):
-        """Clean up hardware when closing the application"""
-        if self.hdwf is not None:
-            dwf.FDwfAnalogOutConfigure(self.hdwf, c_int(0), c_int(0))
-            dwf.FDwfDeviceCloseAll()
+        # Clean up when the application is closed
+        if hasattr(self, 'device'):
+            self.device.close()
         event.accept()
 
-def main():
-    app = QtWidgets.QApplication(sys.argv)
-    app.setStyle('Fusion')  # Modern look
-    
-    # Set dark theme
-    dark_palette = QtGui.QPalette()
-    dark_palette.setColor(QtGui.QPalette.Window, QtGui.QColor(53, 53, 53))
-    dark_palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
-    dark_palette.setColor(QtGui.QPalette.Base, QtGui.QColor(25, 25, 25))
-    dark_palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(53, 53, 53))
-    dark_palette.setColor(QtGui.QPalette.ToolTipBase, QtCore.Qt.white)
-    dark_palette.setColor(QtGui.QPalette.ToolTipText, QtCore.Qt.white)
-    dark_palette.setColor(QtGui.QPalette.Text, QtCore.Qt.white)
-    dark_palette.setColor(QtGui.QPalette.Button, QtGui.QColor(53, 53, 53))
-    dark_palette.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
-    dark_palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
-    dark_palette.setColor(QtGui.QPalette.Link, QtGui.QColor(42, 130, 218))
-    dark_palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(42, 130, 218))
-    dark_palette.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
-    app.setPalette(dark_palette)
-    
-    # Set pyqtgraph configuration
-    pg.setConfigOption('background', 'k')
-    pg.setConfigOption('foreground', 'w')
-    
-    analyzer = SignalAnalyzerApp()
-    analyzer.show()
-    sys.exit(app.exec_())
-
 if __name__ == "__main__":
-    main()
+    app = QtWidgets.QApplication(sys.argv)
+    window = TransferFunctionAnalyzer()
+    window.show()
+    sys.exit(app.exec_())
