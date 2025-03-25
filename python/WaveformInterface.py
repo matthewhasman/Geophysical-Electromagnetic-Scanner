@@ -8,7 +8,7 @@ import math
 
 class AnalogDiscovery:
 
-    def init(self):
+    def __init__(self):
         # load the dynamic library, get constants path (the path is OS specific)
         if platform.startswith("win"):
             # on Windows
@@ -261,7 +261,8 @@ class AnalogDiscovery:
         return frequencies, mag_db, phase_deg, raw_data_list
 
     def frequency_response(self, input_channel, output_channel, start_freq, stop_freq, steps, 
-                          amplitude=0.5, window_type=None, probe_attenuation=1.0):
+                          amplitude=0.5, window_type=None, probe_attenuation=1.0, auto_adjust_sampling=True,
+                          min_samples_per_period=20, max_sampling_rate=100e6):
         """
             Measure frequency response between two channels
             parameters: - input_channel: the channel connected to the input signal (1-2, or 1-4)
@@ -272,6 +273,9 @@ class AnalogDiscovery:
                         - amplitude: signal amplitude in Volts
                         - window_type: window function for FFT
                         - probe_attenuation: attenuation factor for input probe (e.g., 10 for 10x probe)
+                        - auto_adjust_sampling: automatically adjust sampling rate based on frequency
+                        - min_samples_per_period: minimum number of samples per signal period
+                        - max_sampling_rate: maximum sampling rate in Hz
             returns:    - frequencies - array of frequency points
                         - magnitude - array of magnitude values in dB
                         - phase - array of phase values in degrees
@@ -287,81 +291,174 @@ class AnalogDiscovery:
         self.dwf.FDwfAnalogOutNodeFunctionSet(self.handle, c_int(0), self.constants.AnalogOutNodeCarrier, self.constants.funcSine)
         self.dwf.FDwfAnalogOutNodeAmplitudeSet(self.handle, c_int(0), self.constants.AnalogOutNodeCarrier, c_double(amplitude))
         
-        # Prepare window for FFT
-        window = (c_double * self.buffer_size)()
-        vBeta = c_double(1.0)
-        vNEBW = c_double()
+        # Original buffer size and sampling rate
+        original_buffer_size = self.buffer_size
+        original_sampling_rate = self.sampling_frequency
         
-        if window_type is None:
-            window_type = self.constants.DwfWindowFlatTop
-            
-        self.dwf.FDwfSpectrumWindow(ctypes.byref(window), ctypes.c_int(self.buffer_size), 
-                                   window_type, vBeta, ctypes.byref(vNEBW))
+        # Determine optimal number of cycles to capture for different frequencies
+        def get_optimal_cycles(freq):
+            return 1000
         
         for freq in frequencies:
-            # Set AWG frequency
-            self.dwf.FDwfAnalogOutNodeFrequencySet(self.handle, c_int(0), self.constants.AnalogOutNodeCarrier, c_double(freq))
-            self.dwf.FDwfAnalogOutConfigure(self.handle, c_int(0), c_int(1))
-            
-            # Start acquisition
-            self.dwf.FDwfAnalogInConfigure(self.handle, c_int(1), c_int(1))
-            
-            # Wait for acquisition to complete
-            while True:
-                sts = c_byte()
-                self.dwf.FDwfAnalogInStatus(self.handle, c_int(1), ctypes.byref(sts))
-                if sts.value == self.constants.DwfStateDone.value:
-                    break
-                time.sleep(0.001)
-            
-            # Retrieve data for both channels
-            samples_in = (c_double * self.buffer_size)()
-            samples_out = (c_double * self.buffer_size)()
-            self.dwf.FDwfAnalogInStatusData(self.handle, c_int(input_channel - 1), samples_in, self.buffer_size)
-            self.dwf.FDwfAnalogInStatusData(self.handle, c_int(output_channel - 1), samples_out, self.buffer_size)
-            
-            # Apply window and perform FFT
-            def process_data(samples):
-                # Apply window
-                for i in range(self.buffer_size):
-                    samples[i] = samples[i] * window[i]
+            try:
+                # Dynamically adjust sampling rate and buffer size if auto_adjust_sampling is enabled
+                if auto_adjust_sampling:
+                    # Calculate optimal sampling rate (ensure enough samples per period)
+                    optimal_sampling_rate = freq * min_samples_per_period
+                    
+                    # For very low frequencies, we'll cap at a reasonable rate to avoid huge buffers
+                    if optimal_sampling_rate < 1000:
+                        optimal_sampling_rate = 1000
+                    
+                    # For high frequencies, cap at max allowed sampling rate
+                    if optimal_sampling_rate > max_sampling_rate:
+                        optimal_sampling_rate = max_sampling_rate
+                    
+                    # Calculate optimal cycles to capture
+                    cycles_to_capture = get_optimal_cycles(freq)
+                    
+                    # Calculate required buffer size to hold these cycles
+                    period_in_seconds = 1.0 / freq
+                    capture_time = period_in_seconds * cycles_to_capture
+                    required_buffer_size = int(optimal_sampling_rate * capture_time)
+                    
+                    # Make sure buffer size is power of 2 (efficient for FFT)
+                    power_of_two = math.ceil(math.log2(required_buffer_size))
+                    optimal_buffer_size = 2 ** power_of_two
+                    
+                    # Limit buffer size to avoid excessive memory usage
+                    if optimal_buffer_size > 2**20:  # Cap at 1M points
+                        optimal_buffer_size = 2**20
+                    
+                    # Reconfigure scope if needed
+                    if (abs(optimal_sampling_rate - self.sampling_frequency) > 0.1 * self.sampling_frequency or
+                        optimal_buffer_size != self.buffer_size):
+                        print(f"Frequency: {freq:.1f} Hz - Adjusting sampling rate to {optimal_sampling_rate/1e6:.2f} MHz, buffer size to {optimal_buffer_size}")
+                        self.init_scope(
+                            sampling_frequency=optimal_sampling_rate,
+                            buffer_size=optimal_buffer_size,
+                            offset=0,
+                            amplitude_range=2
+                        )
                 
-                # Perform FFT
-                n_bins = self.buffer_size // 2 + 1
-                bins = (c_double * n_bins)()
-                phases = (c_double * n_bins)()
-                self.dwf.FDwfSpectrumFFT(ctypes.byref(samples), self.buffer_size, ctypes.byref(bins), ctypes.byref(phases), n_bins)
+                # Prepare window for FFT
+                window = (c_double * self.buffer_size)()
+                vBeta = c_double(1.0)
+                vNEBW = c_double()
                 
-                # Get frequency index
-                freq_index = int(freq / self.sampling_frequency * self.buffer_size) + 1
-                return bins[freq_index], phases[freq_index]
-            
-            # Process both channels
-            in_mag, in_phase = process_data(samples_in)
-            out_mag, out_phase = process_data(samples_out)
-            
-            # Apply probe attenuation if needed
-            in_mag *= probe_attenuation
-            
-            # Compute transfer function
-            if in_mag <= 0:
-                mag_db = float('-inf')
-                phase_diff = 0
-            else:
-                mag_db = 20 * math.log10(out_mag / in_mag)
-                phase_diff = (out_phase - in_phase) * 180 / math.pi
-                phase_diff = (phase_diff + 180) % 360 - 180  # Wrap to [-180, 180]
-            
-            magnitude.append(mag_db)
-            phase.append(phase_diff)
+                if window_type is None:
+                    window_type = self.constants.DwfWindowFlatTop
+                    
+                self.dwf.FDwfSpectrumWindow(ctypes.byref(window), ctypes.c_int(self.buffer_size), 
+                                          window_type, vBeta, ctypes.byref(vNEBW))
+                
+                # Set AWG frequency
+                self.dwf.FDwfAnalogOutNodeFrequencySet(self.handle, c_int(0), self.constants.AnalogOutNodeCarrier, c_double(freq))
+                self.dwf.FDwfAnalogOutConfigure(self.handle, c_int(0), c_int(1))
+                
+                # Wait for output to stabilize before measuring
+                stabilization_time = max(0.01, 5 / freq)  # Longer wait for lower frequencies
+                time.sleep(stabilization_time)
+                
+                # Start acquisition
+                self.dwf.FDwfAnalogInConfigure(self.handle, c_int(1), c_int(1))
+                
+                # Wait for acquisition to complete
+                while True:
+                    sts = c_byte()
+                    self.dwf.FDwfAnalogInStatus(self.handle, c_int(1), ctypes.byref(sts))
+                    if sts.value == self.constants.DwfStateDone.value:
+                        break
+                    time.sleep(0.001)
+                
+                # Retrieve data for both channels
+                samples_in = (c_double * self.buffer_size)()
+                samples_out = (c_double * self.buffer_size)()
+                self.dwf.FDwfAnalogInStatusData(self.handle, c_int(input_channel - 1), samples_in, self.buffer_size)
+                self.dwf.FDwfAnalogInStatusData(self.handle, c_int(output_channel - 1), samples_out, self.buffer_size)
+                
+                # Apply window and perform FFT
+                def process_data(samples):
+                    # Apply window
+                    for i in range(self.buffer_size):
+                        samples[i] = samples[i] * window[i]
+                    
+                    # Perform FFT
+                    n_bins = self.buffer_size // 2 + 1
+                    bins = (c_double * n_bins)()
+                    phases = (c_double * n_bins)()
+                    self.dwf.FDwfSpectrumFFT(ctypes.byref(samples), self.buffer_size, ctypes.byref(bins), ctypes.byref(phases), n_bins)
+                    
+                    # Calculate frequency bin size
+                    bin_size = self.sampling_frequency / self.buffer_size
+                    
+                    # Get frequency index - find the closest bin to our target frequency
+                    freq_idx = int(round(freq / bin_size))
+                    if freq_idx >= n_bins:
+                        freq_idx = n_bins - 1
+                    
+                    # For better accuracy, find peak around the expected frequency bin
+                    window_size = 5  # Look at bins around expected frequency
+                    start_idx = max(0, freq_idx - window_size)
+                    end_idx = min(n_bins - 1, freq_idx + window_size)
+                    
+                    # Find peak magnitude in the window
+                    peak_idx = start_idx
+                    for i in range(start_idx, end_idx + 1):
+                        if bins[i] > bins[peak_idx]:
+                            peak_idx = i
+                    
+                    return bins[peak_idx], phases[peak_idx]
+                
+                # Process both channels
+                in_mag, in_phase = process_data(samples_in)
+                out_mag, out_phase = process_data(samples_out)
+                
+                # Apply probe attenuation if needed
+                in_mag *= probe_attenuation
+                
+                # Compute transfer function
+                if in_mag <= 0:
+                    mag_db = float('-inf')
+                    phase_diff = 0
+                else:
+                    mag_db = 20 * math.log10(out_mag / in_mag)
+                    phase_diff = (out_phase - in_phase) * 180 / math.pi
+                    phase_diff = (phase_diff + 180) % 360 - 180  # Wrap to [-180, 180]
+                
+                magnitude.append(mag_db)
+                phase.append(phase_diff)
+                
+            except Exception as e:
+                print(f"Error measuring at {freq} Hz: {str(e)}")
+                # Add placeholder values on error
+                magnitude.append(float('nan'))
+                phase.append(float('nan'))
         
-        return frequencies.tolist(), magnitude, phase
+        # Restore original settings
+        if auto_adjust_sampling and (original_buffer_size != self.buffer_size or 
+                                     original_sampling_rate != self.sampling_frequency):
+            print("Restoring original scope settings")
+            self.init_scope(
+                sampling_frequency=original_sampling_rate,
+                buffer_size=original_buffer_size,
+                offset=0,
+                amplitude_range=2
+            )
+        
+        # Filter out any NaN values from failed measurements
+        valid_indices = [i for i, m in enumerate(magnitude) if not math.isnan(m)]
+        valid_freqs = np.array([frequencies[i] for i in valid_indices])
+        valid_magnitude = np.array([magnitude[i] for i in valid_indices])
+        valid_phase = np.array([phase[i] for i in valid_indices])
+        
+        return valid_freqs, valid_magnitude, valid_phase
 
     def close_scope(self):
         """
             Reset and close the oscilloscope
         """
-        # Reset the analog in (oscilloscope)
+        # Reset the analog in (scope) configuration
         self.dwf.FDwfAnalogInReset(self.handle)
         return
 
@@ -372,8 +469,8 @@ class AnalogDiscovery:
         # First close the scope
         self.close_scope()
         
-        # Then close the generator (all channels)
-        self.close_generator()
+        # Then close all generator channels
+        self.close_generator(channel=0)  # 0 means all channels
         
         # Finally close the device
         self.dwf.FDwfDeviceClose(self.handle)

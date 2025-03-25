@@ -1,5 +1,5 @@
 % Electromagnet Parameters of Tx coil
-r = 0.12;         % Radius of coil (m)
+r = 0.115;         % Radius of coil (m)
 N = 40;         % Number of turns
 wireGauge = 26;   % AWG wire gauge
 rho = 1.68e-8;    % Resistivity of copper (ohm·m)
@@ -7,10 +7,10 @@ driver_voltage = 1;
 
 % Electromagnet Parameters of Rx coil
 r2 = 0.05;         % Radius of coil (m)
-N2 = 200;         % Number of turns
+N2 = 250;         % Number of turns
 
 % Physical system parameters
-coil_distance = 0.86;  % Intercoil distance (m)
+coil_distance = 0.78;  % Intercoil distance (m)
 
 bucking_constant = 0.01; % 1 percent for testing
 
@@ -76,9 +76,9 @@ geometric_factor = 1.0;
 rx_primary_tf = tf([ -N*N2*A*A2,0],coil_distance^3) * tx_tf * 1e-7 * geometric_factor;
 
 % Add in terms to describe Rx coil
-L = 7e-3;       % Inductance: 7 mH
-C = 2.02e-10;
-R_coil = 31;    % Coil resistance: 31 ohms
+L = 11.3e-3;       % Inductance: 7 mH
+C = 5.21e-10;
+R_coil = 41.7;    % Coil resistance: 31 ohms
 R_load = 1e6;   % Load resistance: 1 MOhm
 R = (R_coil * R_load) / (R_coil + R_load);
 %R = R_coil + R_load;

@@ -1,15 +1,15 @@
-[primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("Primary_Battery2.csv", 20);
+[primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("NewDevicePrimary3.csv", 20);
 primary_phase = mod(primary_phase, 360);
 % TX coil parameters (Initial Guess)
 res_Tx = 4; % Ohms
-L_Tx = 0.001; % Henries
+L_Tx = 0.000892; % Henries
 N_Tx = 40; % Number of turns
-r_Tx = 0.12; % Radius (m)
+r_Tx = 0.114; % Radius (m)
 a_Tx = r_Tx^2 * pi;
 % Electromagnet Parameters of Rx coil
 r_Rx = 0.05; % Radius of coil (m)
-N_Rx = 200; % Number of turns
-coil_distance = 0.84; % Intercoil distance (m)
+N_Rx = 250; % Number of turns
+coil_distance = 0.9; % Intercoil distance (m)
 a_Rx = r_Rx^2 * pi;
 tx_tf = tf(1, [L_Tx res_Tx]);
 rx_primary_tf = tf([ -N_Tx*N_Rx*a_Tx*a_Rx,0],coil_distance^3) * tx_tf * 1e-7;
@@ -19,6 +19,7 @@ primary_complex = primary_linear .* exp(1j * deg2rad(primary_phase));
 % Set frequency cutoff
 freq_cutoff = 1500; % 20 kHz cutoff - adjust as needed
 % Filter out high frequencies
+
 freq_mask = primary_frequency <= freq_cutoff;
 masked_frequency = primary_frequency(freq_mask);
 primary_complex = primary_complex(freq_mask);
@@ -45,7 +46,7 @@ mag2_db = 20*log10(mag2);
 % Calculate isolated_rx
 isolated_rx = 10.^((plot_magnitude - mag2_db)/20.0) .* exp(1j*deg2rad(plot_phase - phase2));
 
-freq_mask2 = primary_frequency > 50000;
+freq_mask2 = primary_frequency > 1000;
 masked_frequency2 = primary_frequency(freq_mask2);
 isolated_rx_cutoff = isolated_rx(freq_mask2);
 

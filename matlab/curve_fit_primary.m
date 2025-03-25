@@ -1,15 +1,15 @@
 [primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("Primary_Battery2.csv", 20);
 % TX coil parameters (Initial Guess)
 res_Tx = 4; % Ohms
-L_Tx = 0.001; % Henries
+L_Tx = 0.0089; % Henries
 N_Tx = 40; % Number of turns 
-r_Tx = 0.12; % Radius (m)
+r_Tx = 0.115; % Radius (m)
 a_Tx = r_Tx^2 * pi;
 
 % Electromagnet Parameters of Rx coil
 r_Rx = 0.05;         % Radius of coil (m)
-N_Rx = 200;         % Number of turns
-coil_distance = 0.84; % Intercoil distance (m)
+N_Rx = 250;         % Number of turns
+coil_distance = 0.78; % Intercoil distance (m)
 a_Rx = r_Rx^2 * pi;
 
 tx_tf = tf(1, [L_Tx res_Tx]);
