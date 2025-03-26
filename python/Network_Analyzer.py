@@ -27,15 +27,19 @@ def setup_transfer_functions(self):
 sys = control.TransferFunction([1], [1])
 
 sample_rate = 1000000.0
-buffer_size = 2**16
+buffer_size = 2**18
 
 Ad2 = AnalogDiscovery()
 Ad2.init_scope(sample_rate, buffer_size)
 
 start_freq = 500
-end_freq = 50_000
+end_freq = 10_000
 
-frequencies, magnitude, phase = Ad2.frequency_response(1, 2, start_freq, end_freq, 101, 1.0, Ad2.constants.DwfWindowFlatTop)
+# Standard frequency response analysis (respects hardware limits)
+frequencies, magnitude, phase = Ad2.frequency_response(1, 2, start_freq, end_freq, 51, 1.0, Ad2.constants.DwfWindowHann, extended_buffer=True, fixed_buffer_size=2**16)
+
+# High-resolution analysis using extended buffer
+# frequencies, magnitude, phase = Ad2.frequency_response(1, 2, start_freq, end_freq, 51, 1.0, Ad2.constants.DwfWindowHann, extended_buffer=True, fixed_buffer_size=2**20)
 
 
 # Create a figure with two subplots for magnitude and phase
