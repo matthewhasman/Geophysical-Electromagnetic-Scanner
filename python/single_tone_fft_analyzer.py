@@ -15,6 +15,94 @@ import argparse
 import time
 import sys
 from WaveformInterface import AnalogDiscovery
+from scipy.signal import find_peaks
+
+def extract_and_average_cycles(signal, sampling_rate, frequency):
+    """
+    Extract individual cycles from a signal, align them, and compute the average cycle
+    
+    Parameters:
+    - signal: time domain signal array
+    - sampling_rate: rate at which signal was sampled in Hz
+    - frequency: fundamental frequency of the signal in Hz
+    
+    Returns:
+    - cycle_time: time points for a single cycle
+    - average_cycle: average waveform of all extracted cycles
+    - all_cycles: list of all extracted cycles
+    - cycle_indices: indices where cycles begin
+    """
+    # Calculate expected samples per cycle
+    samples_per_cycle = int(sampling_rate / frequency)
+    
+    if samples_per_cycle <= 3:
+        raise ValueError(f"Frequency too high for reliable cycle extraction. Only {samples_per_cycle} samples per cycle.")
+    
+    # Try to find zero crossings or peaks for more reliable cycle detection
+    try:
+        # Find peaks for better cycle identification
+        peaks, _ = find_peaks(signal, height=0.2*max(signal), distance=samples_per_cycle*0.8)
+        
+        if len(peaks) < 2:
+            # If peaks detection fails, try zero crossings
+            zero_crossings = np.where(np.diff(np.signbit(signal)))[0]
+            if len(zero_crossings) < 2:
+                raise ValueError("Could not detect reliable cycles in signal")
+            
+            # Use rising zero crossings
+            rising_zeros = [i for i in range(len(zero_crossings)-1) 
+                         if signal[zero_crossings[i]+1] > signal[zero_crossings[i]]]
+            cycle_indices = [zero_crossings[i] for i in rising_zeros]
+        else:
+            cycle_indices = peaks
+    except Exception as e:
+        print(f"Peak detection failed: {e}. Using simple cycle estimation.")
+        # If both methods fail, just estimate cycles based on frequency
+        num_cycles = int(len(signal) * frequency / sampling_rate)
+        cycle_indices = [int(i * samples_per_cycle) for i in range(num_cycles)]
+    
+    # Ensure we have at least 2 complete cycles
+    if len(cycle_indices) < 2:
+        print("Warning: Not enough cycles detected for averaging")
+        # Return empty results
+        return np.array([]), np.array([]), [], []
+    
+    # Extract cycles
+    all_cycles = []
+    for i in range(len(cycle_indices) - 1):
+        start_idx = cycle_indices[i]
+        # Use the exact distance to the next cycle start as the cycle length
+        cycle_length = cycle_indices[i+1] - start_idx
+        
+        # Ensure we don't go beyond the signal length
+        if start_idx + cycle_length <= len(signal):
+            cycle = signal[start_idx:start_idx + cycle_length]
+            all_cycles.append(cycle)
+    
+    # Skip if no cycles were extracted
+    if not all_cycles:
+        return np.array([]), np.array([]), [], []
+    
+    # Prepare for averaging (resample cycles to the same length if needed)
+    median_length = int(np.median([len(c) for c in all_cycles]))
+    resampled_cycles = []
+    
+    for cycle in all_cycles:
+        if len(cycle) != median_length:
+            # Resample to median length
+            indices = np.linspace(0, len(cycle)-1, median_length)
+            resampled = np.interp(indices, np.arange(len(cycle)), cycle)
+            resampled_cycles.append(resampled)
+        else:
+            resampled_cycles.append(cycle)
+    
+    # Compute average cycle
+    average_cycle = np.mean(resampled_cycles, axis=0)
+    
+    # Generate time vector for a single cycle
+    cycle_time = np.linspace(0, 1/frequency, len(average_cycle))
+    
+    return cycle_time, average_cycle, resampled_cycles, cycle_indices
 
 def analyze_tone(frequency, amplitude=1.0, offset=0, buffer_size=2**16, 
                 sampling_rate=1e6, coherent_sampling=True, window_type=None,
@@ -163,7 +251,8 @@ def analyze_tone(frequency, amplitude=1.0, offset=0, buffer_size=2**16,
         
         print("Analysis complete.")
         return freq_data, mag_data, phase_data, raw_data, ch2_available, \
-               (freq_data2, mag_data2, phase_data2, raw_data2) if ch2_available else None
+               (freq_data2, mag_data2, phase_data2, raw_data2) if ch2_available else None, \
+               actual_freq, sampling_rate
                
     finally:
         # Clean up
@@ -171,7 +260,7 @@ def analyze_tone(frequency, amplitude=1.0, offset=0, buffer_size=2**16,
         device.close()
 
 def plot_results(freq_data, mag_data, phase_data, raw_data, ch2_data=None, 
-                expected_freq=None, title=None):
+                expected_freq=None, title=None, actual_freq=None, sampling_rate=None):
     """
     Plot the FFT results with detailed analysis
     
@@ -183,10 +272,12 @@ def plot_results(freq_data, mag_data, phase_data, raw_data, ch2_data=None,
     - ch2_data: optional tuple with channel 2 data (freq, mag, phase, raw)
     - expected_freq: the expected frequency to highlight
     - title: optional plot title
+    - actual_freq: actual frequency used for analysis
+    - sampling_rate: sampling rate used for acquisition
     """
-    # Create a figure with subplots
-    fig = plt.figure(figsize=(12, 10))
-    gs = GridSpec(3, 2, figure=fig)
+    # Create a figure with subplots - adding one more row for cycle average plot
+    fig = plt.figure(figsize=(12, 12))
+    gs = GridSpec(4, 2, figure=fig)
     
     # Time domain plot
     ax_time = fig.add_subplot(gs[0, :])
@@ -209,8 +300,136 @@ def plot_results(freq_data, mag_data, phase_data, raw_data, ch2_data=None,
     ax_time.text(0.02, 0.95, f'RMS: {rms:.3f}V\nVpp: {vpp:.3f}V', 
                  transform=ax_time.transAxes, bbox=dict(facecolor='white', alpha=0.8))
     
+    # Add cycle average plot
+    ax_cycle = fig.add_subplot(gs[1, :])
+    
+    # First check if we have all required information
+    if actual_freq is not None and sampling_rate is not None:
+        # Extract and average cycles for channel 1
+        try:
+            cycle_time1, avg_cycle1, all_cycles1, cycle_indices1 = extract_and_average_cycles(
+                raw_data, sampling_rate, actual_freq)
+            
+            # If channel 2 is available, extract and average its cycles too
+            if ch2_data and len(ch2_data) >= 4 and len(ch2_data[3]) > 0:
+                cycle_time2, avg_cycle2, all_cycles2, cycle_indices2 = extract_and_average_cycles(
+                    ch2_data[3], sampling_rate, actual_freq)
+                ch2_cycles_available = len(avg_cycle2) > 0
+            else:
+                ch2_cycles_available = False
+            
+            # If channel 2 cycles are available, focus on those
+            if ch2_cycles_available:
+                # Calculate jitter metrics for channel 2
+                cycle_period_samples = [cycle_indices2[i+1] - cycle_indices2[i] 
+                                      for i in range(len(cycle_indices2)-1)]
+                cycle_periods = [p / sampling_rate for p in cycle_period_samples]
+                
+                period_mean = np.mean(cycle_periods)
+                period_std = np.std(cycle_periods)
+                jitter_percent = 100 * period_std / period_mean if period_mean > 0 else 0
+                
+                # Plot channel 2 raw signal with cycle boundaries
+                segment_length = min(5000, len(ch2_data[3]))  # Show a segment of the waveform
+                segment_time = time_points[:segment_length] * 1000
+                ax_cycle.plot(segment_time, ch2_data[3][:segment_length], 'purple', alpha=0.5, label='Ch2 Raw Signal')
+                
+                # Mark cycle boundaries on the raw signal
+                for idx in cycle_indices2:
+                    if idx < segment_length:
+                        ax_cycle.axvline(x=time_points[idx] * 1000, color='r', linestyle='--', alpha=0.3)
+                
+                # Plot average cycle for channel 2
+                ax_cycle_avg = ax_cycle.twinx()
+                cycle_ms = cycle_time2 * 1000
+                ax_cycle_avg.plot(cycle_ms, avg_cycle2, 'g-', linewidth=2, label='Ch2 Averaged Cycle')
+                ax_cycle_avg.set_ylabel('Amplitude (V) - Averaged Cycle', color='g')
+                
+                # Add cycle statistics to the plot
+                stats_text = (f"Channel 2 cycles: {len(all_cycles2)}\n"
+                             f"Average period: {period_mean*1000:.3f} ms\n"
+                             f"Period std dev: {period_std*1000:.3f} ms\n"
+                             f"Jitter: {jitter_percent:.2f}%")
+                
+                ax_cycle.text(0.02, 0.95, stats_text, transform=ax_cycle.transAxes, 
+                            bbox=dict(facecolor='white', alpha=0.8))
+                
+                # Set up legend and labels
+                ax_cycle.set_xlabel('Time (ms)')
+                ax_cycle.set_ylabel('Amplitude (V) - Raw Signal', color='purple')
+                
+                # Create a combined legend
+                lines1, labels1 = ax_cycle.get_legend_handles_labels()
+                lines2, labels2 = ax_cycle_avg.get_legend_handles_labels()
+                ax_cycle.legend(lines1 + lines2, labels1 + labels2, loc='lower right')
+                
+                ax_cycle.set_title('Channel 2 Signal Cycles: Raw and Averaged')
+                ax_cycle.grid(True)
+            elif len(avg_cycle1) > 0:
+                # Fall back to channel 1 if channel 2 is not available or failed
+                # Calculate jitter metrics for channel 1
+                cycle_period_samples = [cycle_indices1[i+1] - cycle_indices1[i] 
+                                      for i in range(len(cycle_indices1)-1)]
+                cycle_periods = [p / sampling_rate for p in cycle_period_samples]
+                
+                period_mean = np.mean(cycle_periods)
+                period_std = np.std(cycle_periods)
+                jitter_percent = 100 * period_std / period_mean if period_mean > 0 else 0
+                
+                # Plot raw signal with cycle boundaries
+                segment_length = min(5000, len(raw_data))  # Show a segment of the waveform
+                segment_time = time_points[:segment_length] * 1000
+                ax_cycle.plot(segment_time, raw_data[:segment_length], 'b-', alpha=0.5, label='Ch1 Raw Signal')
+                
+                # Mark cycle boundaries on the raw signal
+                for idx in cycle_indices1:
+                    if idx < segment_length:
+                        ax_cycle.axvline(x=time_points[idx] * 1000, color='r', linestyle='--', alpha=0.3)
+                
+                # Plot average cycle
+                ax_cycle_avg = ax_cycle.twinx()
+                cycle_ms = cycle_time1 * 1000
+                ax_cycle_avg.plot(cycle_ms, avg_cycle1, 'g-', linewidth=2, label='Ch1 Averaged Cycle')
+                ax_cycle_avg.set_ylabel('Amplitude (V) - Averaged Cycle', color='g')
+                
+                # Add cycle statistics to the plot
+                stats_text = (f"Channel 1 cycles: {len(all_cycles1)}\n"
+                             f"Average period: {period_mean*1000:.3f} ms\n"
+                             f"Period std dev: {period_std*1000:.3f} ms\n"
+                             f"Jitter: {jitter_percent:.2f}%")
+                
+                ax_cycle.text(0.02, 0.95, stats_text, transform=ax_cycle.transAxes, 
+                            bbox=dict(facecolor='white', alpha=0.8))
+                
+                # Set up legend and labels
+                ax_cycle.set_xlabel('Time (ms)')
+                ax_cycle.set_ylabel('Amplitude (V) - Raw Signal', color='b')
+                
+                # Create a combined legend
+                lines1, labels1 = ax_cycle.get_legend_handles_labels()
+                lines2, labels2 = ax_cycle_avg.get_legend_handles_labels()
+                ax_cycle.legend(lines1 + lines2, labels1 + labels2, loc='lower right')
+                
+                ax_cycle.set_title('Channel 1 Signal Cycles: Raw and Averaged')
+                ax_cycle.grid(True)
+            else:
+                ax_cycle.text(0.5, 0.5, "Cycle averaging failed - not enough cycles detected", 
+                             ha='center', va='center', transform=ax_cycle.transAxes)
+                ax_cycle.set_title('Cycle Averaging (Failed)')
+        
+        except Exception as e:
+            # If cycle extraction fails, display error message
+            print(f"Cycle averaging error: {e}")
+            ax_cycle.text(0.5, 0.5, f"Cycle averaging failed: {str(e)}", 
+                         ha='center', va='center', transform=ax_cycle.transAxes)
+            ax_cycle.set_title('Cycle Averaging (Failed)')
+    else:
+        ax_cycle.text(0.5, 0.5, "Cycle averaging requires frequency and sampling rate information", 
+                     ha='center', va='center', transform=ax_cycle.transAxes)
+        ax_cycle.set_title('Cycle Averaging (Not Available)')
+    
     # Full spectrum FFT plot
-    ax_fft = fig.add_subplot(gs[1, :])
+    ax_fft = fig.add_subplot(gs[2, :])
     ax_fft.semilogx(freq_data, mag_data, label='Channel 1')
     ax_fft.set_xlabel('Frequency (Hz)')
     ax_fft.set_ylabel('Magnitude (dB)')
@@ -234,7 +453,7 @@ def plot_results(freq_data, mag_data, phase_data, raw_data, ch2_data=None,
                        arrowprops=dict(arrowstyle='->'))
     
     # Zoomed FFT plot
-    ax_zoom = fig.add_subplot(gs[2, 0])
+    ax_zoom = fig.add_subplot(gs[3, 0])
     
     # Determine zoom range centered around expected frequency
     center_idx = np.argmax(mag_data) if expected_freq is None else \
@@ -261,7 +480,7 @@ def plot_results(freq_data, mag_data, phase_data, raw_data, ch2_data=None,
         ax_zoom.legend()
     
     # Phase plot
-    ax_phase = fig.add_subplot(gs[2, 1])
+    ax_phase = fig.add_subplot(gs[3, 1])
     ax_phase.plot(freq_data[start_idx:end_idx], phase_data[start_idx:end_idx], label='Channel 1')
     ax_phase.set_xlabel('Frequency (Hz)')
     ax_phase.set_ylabel('Phase (degrees)')
@@ -335,7 +554,7 @@ def main():
                         help='DC offset in Volts (default: 0.0)')
     parser.add_argument('--buffer-size', '-b', type=int, default=2**16,
                         help='Capture buffer size (default: 65536)')
-    parser.add_argument('--sampling-rate', '-sr', type=float, default=1e6,
+    parser.add_argument('--sampling-rate', '-sr', type=float, default=1e9,
                         help='Base sampling rate in Hz (default: 1000000)')
     parser.add_argument('--no-coherent', action='store_true',
                         help='Disable coherent sampling')
@@ -385,7 +604,7 @@ def main():
         )
         
         # Unpack results
-        freq_data, mag_data, phase_data, raw_data, ch2_available, ch2_data = result
+        freq_data, mag_data, phase_data, raw_data, ch2_available, ch2_data, actual_freq, sampling_rate = result
         
         # Generate title
         title = f"Single Tone Analysis: {args.frequency} Hz, {args.amplitude} V"
@@ -398,7 +617,9 @@ def main():
             raw_data=raw_data,
             ch2_data=ch2_data,
             expected_freq=args.frequency,
-            title=title
+            title=title,
+            actual_freq=actual_freq,
+            sampling_rate=sampling_rate
         )
         
         # Save if requested
