@@ -13,7 +13,18 @@ from dwfconstants import *
 import sys
 import matplotlib.pyplot as plt
 import numpy
+import control
+from control.matlab import ss, bode
+import sys
+import scipy
 
+def setup_transfer_functions():
+    # Load primary response
+    path = "../matlab/primary_curve_fit_python.mat"
+    mat = scipy.io.loadmat(path)
+    num = mat['num'].tolist()[0][0][0]
+    den = mat['den'].tolist()[0][0][0]
+    return control.TransferFunction(num, den)
 
 if sys.platform.startswith("win"):
     dwf = cdll.dwf
@@ -39,7 +50,7 @@ if hdwf.value == hdwfNone.value:
     print("failed to open device")
     quit()
 # Define a range of frequencies to sweep through
-frequencies = numpy.linspace(1e3, 1e5, 101)  # Example: 10 frequencies from 1 kHz to 10 kHz
+frequencies = numpy.exp(numpy.linspace(numpy.log(500), numpy.log(4e4), 30))  # Example: 30 frequencies from 500 Hz to 40 kHz on an exponential scale
 
 # Initialize lists to store results
 peak_magnitudes1 = []
@@ -120,13 +131,30 @@ for frequency in frequencies:
     peak_phases1.append(phase1[target_idx])
     peak_phases2.append(phase2[target_idx])
 
+
+sys = setup_transfer_functions()
+w = 2 * numpy.pi * numpy.array(frequencies)
+h_mag_prim, h_phase_prim, omega = bode(sys, w, plot=False)
+h_mag_prim_lin = h_mag_prim
+h_mag_prim_db = 20 * numpy.log10(h_mag_prim)
+h_phase_prim_deg = numpy.degrees(h_phase_prim)
+
+h_prim_complex = h_mag_prim_lin * numpy.exp(1j * numpy.deg2rad(h_phase_prim_deg))
+
+unwrapped_phase_diff = numpy.unwrap(numpy.array(peak_phases2) - numpy.array(peak_phases1), 180)
+h_mag_sec_lin = numpy.pow(10, (numpy.array(peak_magnitudes2) - numpy.array(peak_magnitudes1))/20)
+h_secondary_complex = h_mag_sec_lin * numpy.exp(1j * numpy.deg2rad(unwrapped_phase_diff))
+
+hs_hp = h_secondary_complex / h_prim_complex
+
 # Plot the frequency sweep results
 plt.figure(figsize=(12, 8))
 
 # Plot magnitude response
-plt.subplot(2, 1, 1)
+plt.subplot(3, 1, 1)
 plt.semilogx(frequencies / 1000, peak_magnitudes1, label='Channel 1')
 plt.semilogx(frequencies / 1000, numpy.array(peak_magnitudes2) - numpy.array(peak_magnitudes1), label='Channel 2')
+plt.semilogx(frequencies / 1000, h_mag_prim_db, label='Expected Primary Signal')
 plt.title('Frequency Sweep - Magnitude Response')
 plt.xlabel('Frequency (kHz)')
 plt.ylabel('Magnitude (dB)')
@@ -134,14 +162,27 @@ plt.legend()
 plt.grid(True)
 
 # Plot phase response
-plt.subplot(2, 1, 2)
-unwrapped_phase_diff = numpy.unwrap(numpy.array(peak_phases2) - numpy.array(peak_phases1), 180)
+plt.subplot(3, 1, 2)
 plt.semilogx(frequencies / 1000, unwrapped_phase_diff, label='Channel 2')
+plt.semilogx(frequencies / 1000, h_phase_prim_deg, label='Expected Primary Signal')
 plt.title('Frequency Sweep - Phase Response')
 plt.xlabel('Frequency (kHz)')
 plt.ylabel('Phase (degrees)')
 plt.legend()
 plt.grid(True)
+
+# Plot hs/hp response
+plt.subplot(3, 1, 3)
+plt.semilogx(frequencies / 1000, numpy.real(hs_hp), label='Real')
+plt.semilogx(frequencies / 1000, numpy.imag(hs_hp), label='Complex')
+plt.title('Frequency Sweep - hs/hp Response')
+plt.xlabel('Frequency (kHz)')
+plt.ylabel('hs/hp')
+plt.legend()
+plt.grid(True)
+
+
+
 
 plt.tight_layout()
 plt.show()
