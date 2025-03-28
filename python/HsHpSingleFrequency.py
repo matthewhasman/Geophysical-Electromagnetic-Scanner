@@ -9,14 +9,24 @@ from control.matlab import ss, bode
 import sys
 import scipy
 import pyqtgraph as pg
+import csv
+import os
+from datetime import datetime
 
-def setup_transfer_functions():
+def get_primary(freq):
     # Load primary response
     path = "../matlab/primary_curve_fit_python.mat"
     mat = scipy.io.loadmat(path)
     num = mat['num'].tolist()[0][0][0]
     den = mat['den'].tolist()[0][0][0]
-    return control.TransferFunction(num, den)
+    transfer_function =  control.TransferFunction(num, den)
+    w = 2 * numpy.pi * numpy.array(freq)
+    h_mag_prim, h_phase_prim, omega = bode(transfer_function, [w], plot=False)
+    h_mag_prim_lin = h_mag_prim
+    h_phase_prim_deg = numpy.degrees(h_phase_prim)
+    h_prim_complex = h_mag_prim_lin * numpy.exp(1j * numpy.deg2rad(h_phase_prim_deg))
+    return h_prim_complex
+
 
 if sys.platform.startswith("win"):
     dwf = cdll.dwf
@@ -50,7 +60,8 @@ peak_phases2 = []
 
 channel = c_int(0)
 
-frequency = 2e4
+frequency = 1e3
+h_prim_complex = get_primary(frequency)
 dwf.FDwfAnalogOutNodeEnableSet(hdwf, channel, AnalogOutNodeCarrier, c_int(1))
 dwf.FDwfAnalogOutNodeFunctionSet(hdwf, channel, AnalogOutNodeCarrier, funcSine)
 dwf.FDwfAnalogOutNodeFrequencySet(hdwf, channel, AnalogOutNodeCarrier, c_double(frequency))
@@ -78,6 +89,8 @@ dwf.FDwfAnalogInTriggerPositionSet(hdwf, c_double(0.5 * cSamples / hzRate))
 channel1Peaks = numpy.array([])
 channel2Peaks = numpy.array([])
 relativePhases = numpy.array([])
+hshpReals = numpy.array([])
+hshpImag = numpy.array([])
 timestamps = numpy.array([])
 
 # Initialize PyQt application and plots
@@ -103,19 +116,33 @@ mag_time_plot = win.addPlot(title="Magnitude over time")
 mag_time_curve = mag_time_plot.plot(pen='m', name="Running Secondary Magnitude")
 start_time = time.time()
 
+# hs hp plot 
+win.nextRow()
+hshp_plot = win.addPlot(title="HsHp PLot")
+magnitude_plot.addLegend()
+hshp_curve_real = hshp_plot.plot(pen='r', name="Real")
+hshp_curve_imag = hshp_plot.plot(pen='b', name="Imag")
+
+
 # time domain plot 
 win.nextRow()
 time_domain_plot = win.addPlot(title="Time Domain Signal")
 time_domain_curve = time_domain_plot.plot(pen='m', name="Channel 2")
 
-
-
-# Create a QWidget to hold the button
+# Create a QWidget to hold the buttons
 button_widget = pg.QtWidgets.QWidget()
-button_layout = pg.QtWidgets.QVBoxLayout()
+button_layout = pg.QtWidgets.QHBoxLayout()  # Changed to horizontal layout for buttons side by side
+
+# Clear button
 clear_button = pg.QtWidgets.QPushButton("Clear History")
 clear_button.clicked.connect(lambda: clear_data())
 button_layout.addWidget(clear_button)
+
+# Export CSV button
+export_button = pg.QtWidgets.QPushButton("Export CSV")
+export_button.clicked.connect(lambda: export_data_csv())
+button_layout.addWidget(export_button)
+
 button_widget.setLayout(button_layout)
 
 # Add the button widget to the main PyQt window
@@ -131,6 +158,49 @@ def clear_data():
     peak_magnitudes2 = []
     print("History cleared.")
 
+def export_data_csv():
+    """Export the current data to a CSV file"""
+    try:
+        # Create filename with timestamp
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"data/peak_magnitude_data_{timestamp_str}.csv"
+        
+        # Calculate magnitude difference
+        magnitude_difference = peak_magnitudes2 - peak_magnitudes1
+        
+        # Open CSV file for writing
+        with open(filename, 'w', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile)
+            
+            # Write header
+            csvwriter.writerow(['Timestamp (s)', 'Magnitude 1 (dB)', 'Magnitude 2 (dB)', 
+                               'Magnitude Difference (dB)', 'Phase Difference (deg)'])
+            
+            # Write data
+            for i in range(len(timestamps)):
+                csvwriter.writerow([
+                    timestamps[i],
+                    peak_magnitudes1[i] if i < len(peak_magnitudes1) else '',
+                    peak_magnitudes2[i] if i < len(peak_magnitudes2) else '',
+                    magnitude_difference[i] if i < len(magnitude_difference) else '',
+                    relativePhases[i] if i < len(relativePhases) else ''
+                ])
+        
+        print(f"Data exported to {filename}")
+        
+        # Show a message box to inform the user
+        msg_box = pg.QtWidgets.QMessageBox()
+        msg_box.setWindowTitle("Export Successful")
+        msg_box.setText(f"Data successfully exported to:\n{os.path.abspath(filename)}")
+        msg_box.exec_()
+        
+    except Exception as e:
+        print(f"Error exporting data: {e}")
+        # Show error message
+        error_box = pg.QtWidgets.QMessageBox()
+        error_box.setWindowTitle("Export Error")
+        error_box.setText(f"Error exporting data: {e}")
+        error_box.exec_()
 
 while True:
     
@@ -178,8 +248,11 @@ while True:
     phase_diff = peak_phase2 - peak_phase1
     relativePhases = numpy.append(relativePhases, phase_diff)
 
-    h_mag_sec_lin = numpy.pow(10, (numpy.array(peak_magnitudes2) - numpy.array(peak_magnitudes1))/20)
+    h_mag_sec_lin = numpy.pow(10, (magnitude2[target_idx] - magnitude1[target_idx])/20)
     h_secondary_complex = h_mag_sec_lin * numpy.exp(1j * numpy.deg2rad(phase_diff))
+    hshp = h_secondary_complex / h_prim_complex
+    hshpReals = numpy.append(hshpReals, numpy.real(hshp))
+    hshpImag = numpy.append(hshpImag, numpy.imag(hshp))
 
     timestamps = numpy.append(timestamps, time.time() - start_time)
 
@@ -189,6 +262,8 @@ while True:
     phase_curve.setData(timestamps, numpy.unwrap(relativePhases, 180))
     mag_time_curve.setData(timestamps, peak_magnitudes2 - peak_magnitudes1)
     time_domain_curve.setData(numpy.array(rgdSamples2[0:100]))
+    hshp_curve_real.setData(hshpReals)
+    hshp_curve_imag.setData(hshpImag)
+    
     # Process events to update the plots
     app.processEvents()
-
