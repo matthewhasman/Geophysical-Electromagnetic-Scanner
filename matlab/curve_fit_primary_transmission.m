@@ -1,4 +1,4 @@
-[primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("NewDevicePrimary3.csv", 20);
+[primary_magnitude, primary_phase, primary_frequency] = LoadADProMeasure("NewDevicePrimary4.csv", 1);
 primary_phase = mod(primary_phase, 360);
 % TX coil parameters (Initial Guess)
 res_Tx = 4; % Ohms
