@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import QFrame, QLabel, QVBoxLayout, QHBoxLayout
 
 # Default frequency and frequency limits
 min_frequency = 3e2  # 300 Hz 
-max_frequency =3e4  # 30 kHz
+max_frequency = 3e4  # 30 kHz
 
 # Global frequency variable
 frequencies = np.linspace(min_frequency, max_frequency, 8)
@@ -70,7 +70,7 @@ h_prim_complex = get_primary(frequencies)
 
 # Setup initial analog out configuration
 def configure_analog_out():
-    global frequency, hdwf, channel
+    global hdwf, channel
     
     dwf.FDwfAnalogOutNodeEnableSet(hdwf, channel, AnalogOutNodeCarrier, c_int(1))
     dwf.FDwfAnalogOutNodeFunctionSet(hdwf, channel, AnalogOutNodeCarrier, funcSine)
@@ -95,12 +95,13 @@ rgdSamples1 = (c_double * cSamples)()
 rgdSamples2 = (c_double * cSamples)()
 sts = c_int()
 
-# Initialize lists to store results
-peak_magnitudes = np.zeros((1, len(frequencies)))
-relativePhases = np.zeros((1, len(frequencies)))
-hshpReals = np.zeros((1, len(frequencies)))
-hshpImag = np.zeros((1, len(frequencies)))
+# Initialize lists to store results - no initial dummy data
+peak_magnitudes = np.array([])
+relativePhases = np.array([])
+hshpReals = np.array([])
+hshpImag = np.array([])
 timestamps = np.array([])
+data_count = 0  # Counter for number of data points collected
 
 print(f"Configure analog in for frequency {frequencies[0]} Hz")
 dwf.FDwfAnalogInFrequencySet(hdwf, c_double(hzRate))
@@ -126,6 +127,8 @@ magnitude_plot = win.addPlot(title="Magnitude")
 magnitude_plot.addLegend()
 magnitude_curve1 = magnitude_plot.plot(pen='r', name="Magnitude 1")
 magnitude_curve2 = magnitude_plot.plot(pen='b', name="Magnitude 2")
+magnitude_plot.setLabel('left', 'Magnitude', units='dB')
+magnitude_plot.setLabel('bottom', 'Frequency', units='Hz')
 
 # Phase plot - converted to heatmap
 win.nextRow()
@@ -139,6 +142,8 @@ phase_bar = pg.ColorBarItem(
     orientation='h'
 )
 phase_bar.setImageItem(phase_img)
+phase_plot.setLabel('bottom', 'Time', units='s')
+phase_plot.setLabel('left', 'Frequency Index')
 
 # mag time plot - converted to heatmap
 win.nextRow()
@@ -151,6 +156,8 @@ mag_bar = pg.ColorBarItem(
     orientation='h'
 )
 mag_bar.setImageItem(mag_time_img)
+mag_time_plot.setLabel('bottom', 'Time', units='s')
+mag_time_plot.setLabel('left', 'Frequency Index')
 start_time = time.time()
 
 # hs hp plot - converted to heatmap
@@ -164,7 +171,8 @@ hshp_real_bar = pg.ColorBarItem(
     orientation='h'
 )
 hshp_real_bar.setImageItem(hshp_real_img)
-
+hshp_real_plot.setLabel('bottom', 'Time', units='s')
+hshp_real_plot.setLabel('left', 'Frequency Index')
 
 # hs hp plot - converted to heatmap
 win.nextRow()
@@ -177,6 +185,15 @@ hshp_imag_bar = pg.ColorBarItem(
     orientation='h'
 )
 hshp_imag_bar.setImageItem(hshp_imag_img)
+hshp_imag_plot.setLabel('bottom', 'Time', units='s')
+hshp_imag_plot.setLabel('left', 'Frequency Index')
+
+# Add frequency ticks for the heatmaps
+freq_ticks = [(i, f"{freq:.1e}Hz") for i, freq in enumerate(frequencies)]
+phase_plot.getAxis('left').setTicks([freq_ticks])
+mag_time_plot.getAxis('left').setTicks([freq_ticks])
+hshp_real_plot.getAxis('left').setTicks([freq_ticks])
+hshp_imag_plot.getAxis('left').setTicks([freq_ticks])
 
 # Helper function to create styled frames
 def create_styled_frame():
@@ -261,17 +278,27 @@ button_proxy.setWidget(button_frame)
 control_layout = win.addLayout(row=6, col=0)
 control_layout.addItem(button_proxy, row=0, col=1)
 
-# Clear data function
+# Clear data function - properly resets all arrays
 def clear_data():
-    global timestamps, relativePhases, peak_magnitudes, hshpReals, hshpImag, apparent_conductivity
+    global timestamps, relativePhases, peak_magnitudes, hshpReals, hshpImag, data_count
+    # Reset all arrays
     timestamps = np.array([])
+    peak_magnitudes = np.array([])
     relativePhases = np.array([])
     hshpReals = np.array([])
     hshpImag = np.array([])
+    data_count = 0
+    
+    # Clear the image plots
+    phase_img.clear()
+    mag_time_img.clear()
+    hshp_real_img.clear()
+    hshp_imag_img.clear()
+    
     print("History cleared.")
 
 def export_data_csv():
-    """Export the current data to a CSV file"""
+    """Export the current data to a CSV file with multiple frequencies"""
     try:
         # Create directories if they don't exist
         os.makedirs("data", exist_ok=True)
@@ -280,26 +307,38 @@ def export_data_csv():
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"data/peak_magnitude_data_{timestamp_str}.csv"
         
-        
         # Open CSV file for writing
         with open(filename, 'w', newline='') as csvfile:
             csvwriter = csv.writer(csvfile)
             
-            # Write header
-            csvwriter.writerow(['Timestamp (s)', 'Frequency (Hz)', 'Magnitude 1 (dB)', 'Magnitude 2 (dB)', 
-                               'Magnitude Difference (dB)', 'Phase Difference (deg)', 
-                               'HsHp Real', 'HsHp Imag'])
+            # Write header row with all frequencies
+            header = ['Timestamp (s)']
             
-            # Write data
-            for i in range(len(timestamps)):
-                csvwriter.writerow([
-                    timestamps[i],
-                    frequency,  # Include current frequency
-                    peak_magnitudes[i] if i < len(peak_magnitudes) else '',
-                    relativePhases[i] if i < len(relativePhases) else '',
-                    hshpReals[i] if i < len(hshpReals) else '',
-                    hshpImag[i] if i < len(hshpImag) else ''
+            # Add columns for each frequency
+            for freq in frequencies:
+                header.extend([
+                    f'Magnitude ({freq:.1e} Hz)',
+                    f'Phase ({freq:.1e} Hz)',
+                    f'HsHp Real ({freq:.1e} Hz)',
+                    f'HsHp Imag ({freq:.1e} Hz)'
                 ])
+            csvwriter.writerow(header)
+            
+            # Write data rows
+            for i in range(len(timestamps)):
+                row_data = [timestamps[i]]
+                
+                # Add data for each frequency if available
+                if i < len(peak_magnitudes):
+                    for j in range(len(frequencies)):
+                        row_data.extend([
+                            peak_magnitudes[i][j] if j < len(peak_magnitudes[i]) else '',
+                            relativePhases[i][j] if j < len(relativePhases[i]) else '',
+                            hshpReals[i][j] if j < len(hshpReals[i]) else '',
+                            hshpImag[i][j] if j < len(hshpImag[i]) else ''
+                        ])
+                
+                csvwriter.writerow(row_data)
         
         print(f"Data exported to {filename}")
         
@@ -317,10 +356,22 @@ def export_data_csv():
         error_box.setText(f"Error exporting data: {e}")
         error_box.exec_()
 
+# Function to update heatmap scaling and time axis
+def update_heatmap_axes():
+    if len(timestamps) > 0:
+        # Create time ticks based on actual timestamps
+        time_ticks = [(i, f"{timestamps[i]:.1f}s") for i in range(0, len(timestamps), max(1, len(timestamps)//5))]
+        
+        # Update axes ticks
+        phase_plot.getAxis('bottom').setTicks([time_ticks])
+        mag_time_plot.getAxis('bottom').setTicks([time_ticks])
+        hshp_real_plot.getAxis('bottom').setTicks([time_ticks])
+        hshp_imag_plot.getAxis('bottom').setTicks([time_ticks])
+
 while True:
     phase_diff_1d = []
     magnitude_1d = []
-    for frequency in frequencies:
+    for freq_idx, frequency in enumerate(frequencies):
             
         # Configure analog input
         dwf.FDwfAnalogInConfigure(hdwf, c_int(1), c_int(1))
@@ -364,28 +415,46 @@ while True:
     h_secondary_complex = h_mag_sec_lin * np.exp(1j * np.deg2rad(phase_diff_1d))
     hshp = h_secondary_complex / h_prim_complex
 
+    # Capture the current time
+    current_time = time.time() - start_time
+    timestamps = np.append(timestamps, current_time)
+    
+    # Store the current data for all frequencies
+    if len(peak_magnitudes) == 0:
+        # First data point
+        peak_magnitudes = np.array([magnitude_1d])
+        relativePhases = np.array([phase_diff_1d])
+        hshpReals = np.array([np.real(hshp)])
+        hshpImag = np.array([np.imag(hshp)])
+    else:
+        # Add new data
+        peak_magnitudes = np.vstack((peak_magnitudes, magnitude_1d))
+        relativePhases = np.vstack((relativePhases, phase_diff_1d))
+        hshpReals = np.vstack((hshpReals, np.real(hshp)))
+        hshpImag = np.vstack((hshpImag, np.imag(hshp)))
 
-    # Get magnitude and phase at target frequency
-    peak_magnitudes = np.append(peak_magnitudes, [magnitude_1d], axis=0)
-    relativePhases = np.append(relativePhases, [phase_diff_1d], axis=0)
+    data_count += 1
 
-    hshpReals = np.append(hshpReals, [np.real(hshp)], axis=0)
-    hshpImag = np.append(hshpImag,[np.imag(hshp)], axis=0)
-
-    timestamps = np.append(timestamps, time.time() - start_time)
-
-    mu0 = 4 * np.pi * 1e-7
-    omega = 2 * np.pi * frequency
-    r = 0.9
-    apparent_conductivity =  hshpImag * 4 / (mu0 * omega * r**2)
-
-    # Update plots
-    magnitude_curve1.setData(freq, magnitude1)
-    magnitude_curve2.setData(freq, magnitude2)
-    phase_img.setImage(relativePhases)
-    mag_time_img.setImage(peak_magnitudes)
-    hshp_real_img.setImage(hshpReals)
-    hshp_imag_img.setImage(hshpImag)
+    # Update plots when we have data
+    if data_count > 0:
+        # Update spectrograms with proper scaling
+        magnitude_curve1.setData(freq, magnitude1)
+        magnitude_curve2.setData(freq, magnitude2)
+        relativePhases = np.unwrap(relativePhases, 180, axis=0)
+        # Update heatmaps
+        phase_img.setImage(relativePhases)
+        mag_time_img.setImage(peak_magnitudes)
+        hshp_real_img.setImage(hshpReals)
+        hshp_imag_img.setImage(hshpImag)
+        
+        # Update heatmap axes and scaling
+        update_heatmap_axes()
+        
+        # Auto-scale the colorbars based on data
+        phase_bar.setLevels((np.min(relativePhases), np.max(relativePhases)))
+        mag_bar.setLevels((np.min(peak_magnitudes), np.max(peak_magnitudes)))
+        hshp_real_bar.setLevels((np.min(hshpReals), np.max(hshpReals)))
+        hshp_imag_bar.setLevels((np.min(hshpImag), np.max(hshpImag)))
 
     # Process events to update the plots
     app.processEvents()
