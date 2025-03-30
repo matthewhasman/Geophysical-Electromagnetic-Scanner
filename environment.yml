@@ -1,0 +1,11 @@
+name: eosc454
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11.7
+  - numpy
+  - scipy
+  - matplotlib = 3.8.0
+  - discretize
+  - pymatsolver
+  - jupyter
