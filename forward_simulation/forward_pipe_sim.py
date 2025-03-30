@@ -220,9 +220,8 @@ def fem_pipe(
         mut_ind += MTk * MkR
 
     freq_dependent = f_factor * L
-    freq_chanels = freq_dependent.shape[0]
-    c_response = -mut_ind[:,:,np.newaxis] * freq_dependent.reshape(1,1,freq_chanels)/ (MTR)
-
+    freq_channels = freq_dependent.shape[0]
+    c_response = -mut_ind[:,:,np.newaxis] * freq_dependent.reshape(1,1,freq_channels)/ (MTR)
     return c_response
 
 def fem_pipe_coupled(
