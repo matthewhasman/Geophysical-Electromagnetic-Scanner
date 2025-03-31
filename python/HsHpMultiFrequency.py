@@ -16,7 +16,9 @@ from datetime import datetime
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtWidgets import QFrame, QLabel, QVBoxLayout, QHBoxLayout
-
+import torch 
+from training import FDEM1DInversionNet
+import pickle
 
 # Default frequency and frequency limits
 min_frequency = 3e2  # 300 Hz 
@@ -94,6 +96,28 @@ hzRate = FIXED_SAMPLE_RATE
 rgdSamples1 = (c_double * cSamples)()
 rgdSamples2 = (c_double * cSamples)()
 sts = c_int()
+
+## Initialize NN
+
+# Load the trained model - add this after initializing plots and before the main loop
+print("Loading trained FDEM inversion model...")
+try:
+    checkpoint = torch.load('fdem_1d_model.pth')
+    with open('fdem_1d_scaler.pkl', 'rb') as f:
+        scaler = pickle.load(f)
+    
+    # Initialize the model
+    trained_model = FDEM1DInversionNet(num_freqs=len(frequencies))
+    trained_model.load_state_dict(checkpoint['model_state_dict'])
+    trained_model.eval()  # Set to evaluation mode
+
+    
+    print("Model loaded successfully!")
+    model_loaded = True
+except Exception as e:
+    print(f"Error loading model: {e}")
+    print("Continuing without neural network inference...")
+    model_loaded = False
 
 # Initialize lists to store results - no initial dummy data
 peak_magnitudes = np.array([])
@@ -268,6 +292,24 @@ btn_container.addWidget(export_button)
 
 button_layout.addLayout(btn_container)
 
+# Add a line plot for confidence values instead of a heatmap
+win.nextRow()
+confidence_plot = win.addPlot(title="Detection Confidence")
+confidence_curve = confidence_plot.plot(pen={'color': (255, 165, 0), 'width': 3}, name="Confidence")
+confidence_plot.setLabel('left', 'Confidence', units='')
+confidence_plot.setLabel('bottom', 'Time', units='s')
+confidence_plot.setYRange(0, 1)  # Set Y range from 0 to 1 for confidence
+
+# Create a threshold line at 0.5
+threshold_line = pg.InfiniteLine(pos=0.5, angle=0, pen=pg.mkPen('r', width=1, style=Qt.DashLine))
+confidence_plot.addItem(threshold_line)
+threshold_text = pg.TextItem("Threshold (0.5)", color='r', anchor=(0, 1.1))
+threshold_text.setPos(0, 0.5)
+confidence_plot.addItem(threshold_text)
+
+# Create array to store confidence values
+confidence_values = np.array([])
+
 # Create a dedicated control panel row at the bottom of the window
 win.nextRow()
 
@@ -287,6 +329,7 @@ def clear_data():
     relativePhases = np.array([])
     hshpReals = np.array([])
     hshpImag = np.array([])
+    confidence_values = np.array([])
     data_count = 0
     
     # Clear the image plots
@@ -294,7 +337,8 @@ def clear_data():
     mag_time_img.clear()
     hshp_real_img.clear()
     hshp_imag_img.clear()
-    
+    confidence_curve.clear() # Clear confidence curve
+
     print("History cleared.")
 
 def export_data_csv():
@@ -435,6 +479,56 @@ while True:
 
     data_count += 1
 
+    # Run neural network inference if model is loaded
+    if model_loaded:
+        try:
+            # Prepare input data for the model (convert complex values to real and imaginary parts)
+            real_part = np.real(h_secondary_complex)
+            imag_part = np.imag(h_secondary_complex)
+            
+            # Concatenate real and imaginary parts
+            model_input = np.concatenate([real_part, imag_part])
+            
+            # Normalize with the scaler if available
+            if scaler is not None:
+                model_input = scaler.transform(model_input.reshape(1, -1)).reshape(-1)
+            
+            # Convert to tensor
+            model_input_tensor = torch.tensor(model_input, dtype=torch.float32).unsqueeze(0)
+            
+            # Run inference
+            with torch.no_grad():
+                presence_prob, location, size = trained_model(model_input_tensor)
+            
+            # Convert to numpy and get the confidence value
+            confidence = presence_prob.item()
+            
+            # Update confidence values
+            if len(confidence_values) == 0:
+                confidence_values = np.array([confidence])
+            else:
+                confidence_values = np.append(confidence_values, confidence)
+                
+            # # Print the results
+            # x, y, z = location.squeeze().numpy()
+            # length, radius = size.squeeze().numpy()
+            # print(f"Detection confidence: {confidence:.4f}, Location: ({x:.2f}, {y:.2f}, {z:.2f}), "
+            #       f"Size: length={length:.2f}m, radius={radius:.2f}m")
+                  
+        except Exception as e:
+            print(f"Error during inference: {e}")
+            # Add a dummy confidence value if inference fails
+            if len(confidence_values) == 0:
+                confidence_values = np.array([0.0])
+            else:
+                confidence_values = np.append(confidence_values, 0.0)
+    else:
+        # Add a dummy confidence value if model isn't loaded
+        if len(confidence_values) == 0:
+            confidence_values = np.array([0.0])
+        else:
+            confidence_values = np.append(confidence_values, 0.0)
+
     # Update plots when we have data
     if data_count > 0:
         # Update spectrograms with proper scaling
@@ -444,17 +538,20 @@ while True:
         # Update heatmaps
         phase_img.setImage(relativePhases)
         mag_time_img.setImage(peak_magnitudes)
-        hshp_real_img.setImage(hshpReals)
-        hshp_imag_img.setImage(hshpImag)
-        
+        mean_minus_reals = hshpReals - np.mean(hshpReals, axis=0)
+        mean_minus_imags = hshpImag - np.mean(hshpImag, axis=0)
+        hshp_real_img.setImage(hshpReals - np.mean(hshpReals, axis=0))
+        hshp_imag_img.setImage(hshpImag - np.mean(hshpImag, axis=0))
+        confidence_curve.setData(timestamps, confidence_values)
+
         # Update heatmap axes and scaling
         update_heatmap_axes()
         
         # Auto-scale the colorbars based on data
         phase_bar.setLevels((np.min(relativePhases), np.max(relativePhases)))
         mag_bar.setLevels((np.min(peak_magnitudes), np.max(peak_magnitudes)))
-        hshp_real_bar.setLevels((np.min(hshpReals), np.max(hshpReals)))
-        hshp_imag_bar.setLevels((np.min(hshpImag), np.max(hshpImag)))
+        hshp_real_bar.setLevels((np.min(mean_minus_reals ), np.max(mean_minus_reals)))
+        hshp_imag_bar.setLevels((np.min(mean_minus_imags), np.max(mean_minus_imags)))
 
     # Process events to update the plots
     app.processEvents()
