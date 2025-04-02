@@ -186,7 +186,7 @@ def compute_apparent_conductivity(sigma, frequencies, dipole_dist, sensor_ht):
     """
     num_layers = len(sigma)
     mu = np.ones(num_layers) * (4 * np.pi * 1e-7)
-    d = np.ones(num_layers) * 5.0  # Layer thickness in meters
+    d = np.ones(num_layers) * 0.5  # Layer thickness in meters
     d[-1] = np.inf  # Bottom layer extends to infinity
     
     omega = 2 * np.pi * frequencies
@@ -314,19 +314,21 @@ def run_geophysical_inversion(csv_file, output_dir='inversion_results'):
     
     # Setup inversion parameters
     # For this example, we'll use the magnitude data as apparent conductivity
-    apparent_conductivity = data['magnitude_data']
+    mu0 = 4 * np.pi * 1e-7
+    scaling = 4 / (frequencies * np.pi * 2  * 0.9**2 * mu0)
+    apparent_conductivity = data['hshp_imag_data'] * scaling # Use the imaginary part as apparent conductivity
     
     # Setup inversion parameters
     gamma = 1e0  # Regularization base parameter
     q = 0.9  # Hyperparameter for smoothness
     ell = 5  # GSVD truncation level
     epsilon = 1e-3  # Convergence tolerance
-    max_iters = 50  # Maximum iterations
-    num_layers = 30  # Number of layers for the model
+    max_iters = 10  # Maximum iterations
+    num_layers = 50  # Number of layers for the model
     
     # Sensor parameters (these would usually be provided or derived from the data)
-    dipole_dist = 1.0  # Distance between transmitter and receiver dipoles (meters)
-    sensor_ht = 0.1  # Height of the sensor above the ground (meters)
+    dipole_dist = 0.9  # Distance between transmitter and receiver dipoles (meters)
+    sensor_ht = 0.2  # Height of the sensor above the ground (meters)
     
     # Get dimensions
     num_soundings, num_freqs = apparent_conductivity.shape
