@@ -322,7 +322,7 @@ control_layout.addItem(button_proxy, row=0, col=1)
 
 # Clear data function - properly resets all arrays
 def clear_data():
-    global timestamps, relativePhases, peak_magnitudes, hshpReals, hshpImag, data_count
+    global timestamps, relativePhases, peak_magnitudes, hshpReals, hshpImag, data_count, confidence_values
     # Reset all arrays
     timestamps = np.array([])
     peak_magnitudes = np.array([])
