@@ -115,10 +115,10 @@ class FDEMInversionLoss(nn.Module):
         return total_loss, presence_loss, location_loss, size_loss
 
 # Training function
-def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0.001):
+def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0.001, device='cpu'):
     # Define loss function
     criterion = FDEMInversionLoss()
-    
+    model = model.to(device)
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     
@@ -139,6 +139,9 @@ def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0
         
         for freq_data, labels in train_loader:
             # Forward pass
+            freq_data = freq_data.to(device)
+            labels = labels.to(device)
+            
             pred_presence, pred_location, pred_size = model(freq_data)
             
             # Compute losses
@@ -151,6 +154,8 @@ def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0
             total_loss.backward()
             optimizer.step()
             
+            ## log the loss 
+            print(f"Epoch {epoch+1}/{num_epochs}, Batch Loss: {total_loss.item():.4f}", end='\r')
             epoch_total_loss += total_loss.item()
             epoch_presence_loss += presence_loss.item()
             epoch_location_loss += location_loss.item()
@@ -168,6 +173,8 @@ def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0
         
         with torch.no_grad():
             for freq_data, labels in val_loader:
+                freq_data = freq_data.to(device)
+                labels = labels.to(device)
                 # Forward pass
                 pred_presence, pred_location, pred_size = model(freq_data)
                 
@@ -175,7 +182,7 @@ def train_model(model, train_loader, val_loader, num_epochs=100, learning_rate=0
                 total_loss, presence_loss, location_loss, size_loss = criterion(
                     pred_presence, pred_location, pred_size, labels
                 )
-                
+
                 val_total_loss += total_loss.item()
                 val_presence_loss += presence_loss.item()
                 val_location_loss += location_loss.item()
@@ -282,19 +289,25 @@ def main():
     test_dataset = FDEMDataset(X_test, y_test)
     
     # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32)
-    test_loader = DataLoader(test_dataset, batch_size=32)
+    train_loader = DataLoader(train_dataset, batch_size=4096, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=1024)
+    test_loader = DataLoader(test_dataset, batch_size=1024)
     
     # Initialize the model with the number of frequencies
     # Input dimension is doubled due to real and imaginary components
     num_freqs = len(freqs)
     print(f"Creating model for {num_freqs} frequencies...")
-    model = FDEM1DInversionNet(num_freqs=num_freqs)
+    model = FDEM1DInversionNet(num_freqs=num_freqs, hidden_size=256)
+
+    ## check which device 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    model.to(device)
+
     
     # Train the model
     print("Starting model training...")
-    trained_model, train_losses, val_losses = train_model(model, train_loader, val_loader, num_epochs=150)
+    trained_model, train_losses, val_losses = train_model(model, train_loader, val_loader, num_epochs=150, device=device)
     
     # Save the model
     model_save_path = 'fdem_1d_model.pth'
@@ -318,6 +331,7 @@ def main():
     # Evaluate on test set
     print("Evaluating on test set...")
     trained_model.eval()
+    trained_model.to('cpu')
     correct_detections = 0
     total_positive = 0
     total_examples = len(test_dataset)

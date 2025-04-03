@@ -181,7 +181,7 @@ def prepare_1d_data(response_list, parameters, background_responses, x_coords, y
                     # Determine if this is a "positive" or "negative" example
                     # Consider points far from the object center as negative examples
                     is_present = 1.0
-                    if distance > 3.0:  # Assuming 3m is far enough to consider it "not present"
+                    if distance > 1.0:  # Assuming 1m is far enough to consider it "not present"
                         is_present = 0.0
                     
                     # Create label vector: [is_present, x_center, y_center, z_center, length, radius]
@@ -260,8 +260,8 @@ def main():
     # random parameters
     conductivity = np.random.uniform(1e4, 1e6, n_sims)
     permeability = 4*np.pi*1e-7  # free space permeability
-    xc = np.random.uniform(x_min, x_max, n_sims)
-    yc = np.random.uniform(x_min, x_max, n_sims)
+    xc = np.zeros(n_sims)
+    yc = np.zeros(n_sims)
     zc = np.random.uniform(0.5, 2, n_sims)
     dincl = np.random.uniform(0, 90, n_sims)     # inclination angle in degrees
     ddecl = np.random.uniform(0, 360, n_sims)    # declination angle in degrees
