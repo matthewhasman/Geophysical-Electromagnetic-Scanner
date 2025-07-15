@@ -102,8 +102,8 @@ sts = c_int()
 # Load the trained model - add this after initializing plots and before the main loop
 print("Loading trained FDEM inversion model...")
 try:
-    checkpoint = torch.load('fdem_1d_model.pth')
-    with open('fdem_1d_scaler.pkl', 'rb') as f:
+    checkpoint = torch.load('models/fdem_1d_model.pth')
+    with open('models/fdem_1d_scaler.pkl', 'rb') as f:
         scaler = pickle.load(f)
     
     # Initialize the model

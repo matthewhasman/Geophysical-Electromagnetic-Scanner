@@ -12,7 +12,7 @@ max_frequency = 7e4  # 70 kHz
 # Function to convert MIDI note number to frequency in Hz with bounds checking
 def midi_to_freq(note):
     freq = 440 * (2 ** ((note - 69) / 12))
-    freq *= 10 # increase freq into audible bounds 
+    freq *= 1 # increase freq into audible bounds 
     # Apply frequency bounds
     if freq < min_frequency:
         print(f"Warning: Note {note} frequency ({freq:.2f} Hz) is below device minimum ({min_frequency} Hz)")
@@ -180,7 +180,7 @@ def play_midi_file(midi_file_path):
                     if active_notes:
                         highest_note = max(active_notes.keys())
                         velocity = active_notes[highest_note]
-                        amplitude = 2.0 * (velocity / 127.0) * global_volume
+                        amplitude = 2.0 * (velocity / 127.0) * global_volume * 2
                         dwf.FDwfAnalogOutNodeAmplitudeSet(hdwf, channel, AnalogOutNodeCarrier, c_double(amplitude))
                         dwf.FDwfAnalogOutConfigure(hdwf, channel, c_int(1))
         
